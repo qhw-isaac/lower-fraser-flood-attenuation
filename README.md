@@ -1,8 +1,3 @@
----
-output:
-  html_document: default
-  pdf_document: default
----
 # Lower Fraser Flood Attenuation & Benefiting Areas
 
 Regional adaptation of the national flood-prevention assessment by Duarte et al. (2024, *Ecosystem Services*), scoped to the **Metro Vancouver Regional District (MVRD)** and **Fraser Valley Regional District (FVRD)** for the **UBC Sustainability Scholars 2026 project #2026-030**.
