@@ -1,49 +1,99 @@
-# History files
+# ============================================================================
+# R / RStudio
+# ============================================================================
 .Rhistory
 .Rapp.history
-
-# Session Data files
 .RData
 .RDataTmp
-
-# User-specific files
 .Ruserdata
-
-# Example code in package build process
+.Rproj.user/
+.httr-oauth
+.Renviron
 *-Ex.R
-
-# Output files from R CMD build
 /*.tar.gz
-
-# Output files from R CMD check
 /*.Rcheck/
 
-# RStudio files
-.Rproj.user/
-
-# produced vignettes
-vignettes/*.html
-vignettes/*.pdf
-
-# OAuth2 token, see https://github.com/hadley/httr/releases/tag/v0.3
-.httr-oauth
-
-# knitr and R markdown default cache directories
+# knitr / rmarkdown caches
 *_cache/
 /cache/
-
-# Temporary files created by R markdown
 *.utf8.md
 *.knit.md
-
-# R Environment Variables
-.Renviron
-
-# pkgdown site
+vignettes/*.html
+vignettes/*.pdf
 docs/
 
-# translation temp files
+# pkgdown / Shiny
+rsconnect/
 po/*~
 
-# RStudio Connect folder
-rsconnect/
+# ============================================================================
+# OS / IDE
+# ============================================================================
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# ============================================================================
+# Project data — large rasters/vectors live outside git
+# ============================================================================
+
+# raw downloads (from GEE, NRCan, PCIC, etc.)
+data/raw/**
+!data/raw/.gitkeep
+
+# intermediate / derived rasters
+data/processed/**
+!data/processed/.gitkeep
+
+# figure / table / shapefile outputs (regenerated from scripts)
+output/figures/**
+!output/figures/.gitkeep
+output/tables/**
+!output/tables/.gitkeep
+output/shapefiles/**
+!output/shapefiles/.gitkeep
+
+# GEE-side downloads sometimes land here
+*.tif
+*.tiff
+*.nc
+*.hdf
+*.zip
+*.7z
+
+# but always keep the small JS scripts
+!gee/*.js
+
+# rendered report outputs
+report/*.html
+report/*.pdf
+technical_report/*.html
+technical_report/*.pdf
+
+# ============================================================================
+# Reference material (large PDFs the user provided locally for context)
+# ============================================================================
+Context/
+technical_report/
+lookup/
+
+# temp hide
+00_setup.R
+01_aoi.R
+02_lulc.R
+03_soils.R
+04_dem_slope.R
+05_precipitation.R
+06_floodplains.R
+07_subbasins.R
+08_curve_numbers.R
+09_runoff_retention.R
+10_demand.R
+11_routing_decay.R
+12_realized_benefit.R
+13_population.R
+14_validation_2021.R
+15_capital_projects.R
+99_figures_tables.R
+prep_hrdem_mosaic.R
