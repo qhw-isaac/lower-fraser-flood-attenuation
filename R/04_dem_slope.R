@@ -26,10 +26,10 @@ message("  · loading DEM 'dem_glo30' from ", dem_path)
 dem <- terra::rast(dem_path) |> align_to_grid(method = "bilinear")
 
 slope_real <- terra::terrain(dem, v = "slope", neighbors = 8, unit = "degrees")
-
 lulc <- terra::rast(file.path(paths()$processed, "02_lulc_values.tif"))
 slope_deg <- terra::ifel(is.na(slope_real) & !is.na(lulc), 10, slope_real)
-slope_deg <- terra::mask(slope_deg, lulc)
+aoi_mask <- terra::rasterize(terra::vect(read_aoi("upstream")), slope_deg, field = 1)
+slope_deg <- terra::mask(slope_deg, aoi_mask)
 
 safe_writeRaster(dem, file.path(paths()$processed, "04_dem.tif"))
 safe_writeRaster(slope_deg, file.path(paths()$processed, "04_slope_deg.tif"))

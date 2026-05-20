@@ -85,14 +85,13 @@ hy <- terra::rast(data_path("hysogs250m")) |> align_to_grid(method = "near")
 hy <- terra::ifel(hy %in% c(11, 12, 13, 14), 4, hy)
 
 hsg <- terra::ifel(!is.na(bc_r), bc_r, hy)
-hsg <- terra::ifel(is.na(hsg) & !is.na(lulc) & !(lulc %in% excluded_lulc), 4L, hsg)
-hsg <- terra::mask(hsg, lulc %in% excluded_lulc, maskvalue = TRUE)
+hsg <- terra::ifel(is.na(hsg) & !is.na(lulc), 4L, hsg)
+hsg <- terra::mask(hsg, lulc)
 
-# hsg_src derived AFTER hsg is finalised
 hsg_src <- terra::ifel(!is.na(bc_r_src), bc_r_src,
                        terra::ifel(!is.na(hy) & is.na(bc_r_src), 3L,
                                    terra::ifel(!is.na(hsg), 4L, NA)))
-hsg_src <- terra::mask(hsg_src, lulc %in% excluded_lulc, maskvalue = TRUE)
+hsg_src <- terra::mask(hsg_src, lulc)
 
 safe_writeRaster(hsg, file.path(paths()$processed, "03_hsg.tif"))
 safe_writeRaster(hsg_src, file.path(paths()$processed, "03_hsg_source.tif"))
