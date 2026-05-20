@@ -80,8 +80,6 @@ lookup/
 
 # temp hide
 00_setup.R
-06_floodplains.R
-07_subbasins.R
 08_curve_numbers.R
 09_runoff_retention.R
 10_demand.R
