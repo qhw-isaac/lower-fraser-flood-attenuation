@@ -80,8 +80,6 @@ lookup/
 
 # temp hide
 00_setup.R
-01_aoi.R
-02_lulc.R
 03_soils.R
 04_dem_slope.R
 05_precipitation.R
