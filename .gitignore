@@ -80,7 +80,6 @@ lookup/
 
 # temp hide
 00_setup.R
-04_dem_slope.R
 05_precipitation.R
 06_floodplains.R
 07_subbasins.R
