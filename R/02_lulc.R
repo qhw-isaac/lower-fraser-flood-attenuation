@@ -37,8 +37,9 @@ aafc <- terra::rast(data_path("aafc_aci")) |>
 # find aafc codes that are crops only
 crop_codes <- aafc_codes$aafc_code[aafc_codes$is_crop]
 
-# create lulc dataset, overriding nalcms only if aafc data is aa crop
-lulc <- terra::ifel(aafc %in% crop_codes, aafc, nalcms)
+# create lulc dataset, overriding nalcms only if aafc data is a crop
+lulc <- terra::ifel(!is.na(aafc) & aafc %in% crop_codes, aafc, nalcms)
+lulc <- terra::mask(lulc, terra::rasterize(terra::vect(read_aoi("upstream")), lulc, field = 1))
 lulc_src <- terra::ifel(aafc %in% crop_codes, 2L, 1L)  # 1 = NALCMS, 2 = AAFC
 
 # Note: AAFC's built-up (34) and barren (30) leave NALCMS values 17/16 alone.
