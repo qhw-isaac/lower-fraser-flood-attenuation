@@ -80,7 +80,6 @@ bc_r_src <- terra::rasterize(terra::vect(soils), template, field = "hsg_src_poly
 bc_r_src <- terra::classify(bc_r_src, cbind(-2147483648, NA))
 
 lulc <- terra::rast(file.path(paths()$processed, "02_lulc_values.tif"))
-excluded_lulc <- c(0L, 18L, 19L)
 
 hy <- terra::rast(data_path("hysogs250m")) |> align_to_grid(method = "near")
 hy <- terra::ifel(hy %in% c(11, 12, 13, 14), 4, hy)
