@@ -108,53 +108,60 @@ legend <- dplyr::bind_rows(legend, aafc_legend)
 readr::write_csv(legend, file.path(paths()$processed, "03_lulc_class_legend.csv"))
 
 # ---- 5. Visualizations -------------------------------------------------------
+# NALCMS water (class 18) for river/lake overlay on the classes map
+water_qa <- terra::ifel(!is.na(aoi_mask) & nalcms == 18L, 1L, NA_integer_)
+
 # File 1: LULC source and natural mask source
-qa_png("03_lulc_sources.png", ncol = 2, function() {
-  op <- graphics::par(mfrow = c(1, 2), mar = c(3, 3, 2, 4), oma = c(0, 0, 1, 5))
+qa_png("03_lulc_sources.png", ncol = 2, panel_h = 1150, function() {
+  op <- graphics::par(mfrow = c(1, 2), mar = c(3, 3, 6, 6), oma = c(1, 0, 1, 6))
   on.exit(graphics::par(op), add = TRUE)
-  
+
   terra::plot(lulc_src,
               main = "LULC source\n(NALCMS vs AAFC ACI override)",
               type = "classes",
               levels = c("NALCMS", "AAFC ACI"),
               col = c("forestgreen", "goldenrod"),
+              background = "grey90",
               ext = terra::ext(lulc))
-  
+
   terra::plot(nat_src,
               main = "Natural mask source\n(NALCMS + MV RNIN refinement)",
               type = "classes",
               levels = c("none", "NALCMS", "RNIN corridor", "RNIN patch"),
               col = c("grey90", "forestgreen", "steelblue", "darkorange"),
+              background = "grey90",
               ext = terra::ext(lulc))
 })
 
 # File 2: Full LULC classes
 qa_png("03_lulc_classes.png", ncol = 1, function() {
-  op <- graphics::par(mfrow = c(1, 1), mar = c(2, 3, 2, 2), oma = c(0, 0, 0, 13))
+  op <- graphics::par(mfrow = c(1, 1), mar = c(2, 3, 4, 2), oma = c(0, 0, 0, 13))
   on.exit(graphics::par(op), add = TRUE)
-  
+
   lulc_plot <- lulc
   lulc_plot[lulc_plot %in% aafc_codes$aafc_code[aafc_codes$is_crop]] <- 200L
-  
+
   ids <- c(0L, nalcms_codes$nalcms_code, 200L)
   cols <- c("lightblue", "darkgreen", "khaki4", "green4", "olivedrab",
             "goldenrod4", "wheat", "rosybrown", "lightgreen", "palegreen3",
             "brown", "yellow3", "grey60", "red", "steelblue",
             "white", "darkorange")
-  
+
   coltab <- data.frame(value = ids, col = cols)
   terra::coltab(lulc_plot) <- coltab
-  
+
   lulc_labeled <- terra::categories(lulc_plot,
                                     value = data.frame(
                                       id    = ids,
                                       label = c("No data", nalcms_codes$nalcms_name, "Cropland (AAFC)")
                                     ))
-  
+
   terra::plot(lulc_labeled,
               main = "LULC classes\n(NALCMS + AAFC ACI)",
               type = "classes",
+              background = "grey90",
               ext = terra::ext(lulc))
+  terra::plot(water_qa, add = TRUE, legend = FALSE, col = "#74add1")
 })
 
 message("✓ 03_lulc.R — wrote LULC values, natural mask, and legend")
