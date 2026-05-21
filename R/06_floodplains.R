@@ -9,16 +9,21 @@
 
 source(here::here("R", "00_setup.R"))
 
+lulc_path <- file.path(paths()$processed, "02_lulc_values.tif")
+if (!file.exists(lulc_path)) {
+  stop("02_lulc_values.tif not found — run R/02_lulc.R before floodplains")
+}
+lulc_grid <- terra::rast(lulc_path)
+
 fp_path <- data_path("mohanty_floodplain_100yr")
 ext <- tools::file_ext(fp_path)
 
 if (ext %in% c("tif", "tiff")) {
-  fp <- terra::rast(fp_path) |> align_to_grid(method = "near")
+  fp <- terra::rast(fp_path) |> terra::project(lulc_grid, method = "near")
   fp <- terra::ifel(fp > 0, 1, 0)
 } else {
   v <- sf::st_read(fp_path, quiet = TRUE) |> sf::st_transform(PROJECT_CRS)
-  template <- align_to_grid(terra::rast(file.path(paths()$processed, "02_lulc_values.tif")))
-  fp <- terra::rasterize(terra::vect(v), template, field = 1, background = 0)
+  fp <- terra::rasterize(terra::vect(v), lulc_grid, field = 1, background = 0)
 }
 
 outcome_aoi <- read_aoi("outcome")
