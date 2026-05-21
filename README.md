@@ -1,11 +1,83 @@
 # Lower Fraser Flood Attenuation & Benefiting Areas
 
-Regional adaptation of the national flood-prevention assessment by Duarte et al. (2024, *Ecosystem Services*), scoped to the **Metro Vancouver Regional District (MVRD)** and **Fraser Valley Regional District (FVRD)** for the **UBC Sustainability Scholars 2026 project #2026-030**.
+Regional adaptation of Duarte et al. (2024, *Ecosystem Services*), scoped to **Metro Vancouver (MVRD)** and **Fraser Valley (FVRD)** for UBC Sustainability Scholars 2026 project #2026-030.
 
-This R pipeline (1) maps potential runoff retention by upstream natural ecosystems, (2) identifies the downstream built-up, agricultural, and population areas that benefit from that retention, and (3) ranks sub-basins by realized benefit so that conservation and capital-project investments can be prioritized in support of *Metro 2050* and the *BC Flood Strategy*.
+The R pipeline maps potential runoff retention by upstream natural ecosystems, identifies downstream built-up and agricultural areas that benefit, and ranks sub-basins by realised benefit (provision × demand).
 
 ---
 
-## 1. Approach
+## Approach
 
-Duarte's national framework is preserved: SCS Curve Number runoff modelling (USDA TR-55) with slope adjustment (Huang et al. 2006), a natural-vegetation counterfactual to isolate retention attributable to ecosystems, sub-basin aggregation with distance-decay-weighted downstream demand, and a realized-benefit ranking.
+Duarte's framework is preserved: SCS Curve Number runoff (USDA TR-55) with Huang slope adjustment, a natural-vegetation counterfactual, sub-basin aggregation, distance-decay-weighted downstream demand, and percentile ranking.
+
+Regional inputs: 30 m NALCMS + AAFC ACI, BC Soil Survey (HYSOGs gap-fill), Copernicus GLO-30, PCIC PRISM wettest-month precipitation, Mohanty 100-yr floodplain, HydroBASINS L12, MV RNIN patches/corridors inside MVRD. CRS: EPSG:3005; decay half-life: 20 km; upstream cap: 100 km flow distance.
+
+---
+
+## Pipeline order
+
+Scripts run in numeric order. **Sub-basins come before rasters** so the working grid is clipped to the hydrologically refined upstream AOI — not a regional-district placeholder that would miss Fraser/Thompson basins draining into the Lower Mainland from outside MVRD ∪ FVRD ∪ SLRD.
+
+```
+R/
+├── 00_setup.R              libs, paths, CRS/grid helpers, data_path()
+├── 01_aoi.R                outcome + downstream AOIs (MVRD ∪ FVRD); district refs
+├── 02_subbasins.R          HydroBASINS L12, topology, 01_aoi_upstream.gpkg
+│                           ── harmonize inputs (Duarte 01_harmonize) ──
+├── 03_lulc.R               NALCMS + AAFC + RNIN → LULC + natural mask
+├── 04_soils.R              HSG raster (BC Soil Survey + HYSOGs)
+├── 05_dem_slope.R          GLO-30 DEM + slope (degrees)
+├── 06_precipitation.R      wettest-month P (mm)
+├── 07_floodplains.R        100-yr floodplain mask (Mohanty)
+│                           ── service provision (Duarte 02_spa) ──
+├── 08_curve_numbers.R      CN baseline + barren counterfactual, slope-adj
+├── 09_runoff_retention.R   SCS-CN → PRR (mm) per pixel
+│                           ── service-benefiting area (Duarte 03_sba) ──
+├── 10_demand.R             built-up + crop area in floodplain, per sub-basin
+├── 11_routing_decay.R      flow-distance decay → TDA per sub-basin
+│                           ── realised benefit (Duarte 04) ──
+├── 12_realized_benefit.R   PRR × TDA → RI + percentile intervals
+├── 13_population.R         benefiting population by RI interval
+└── 99_figures_tables.R     publication figures + summary tables
+```
+
+Every script sources `00_setup.R`, reads raw data via `data_path("layer_id")` from `data_sources.csv`, and writes to `data/processed/` (or `output/` for 99).
+
+---
+
+## AOIs
+
+| AOI | Built by | Extent |
+|---|---|---|
+| `outcome_aoi` | `01_aoi.R` | MVRD ∪ FVRD |
+| `downstream_aoi` | `01_aoi.R` | MVRD ∪ FVRD (demand / floodplain tally) |
+| `upstream_aoi` | `02_subbasins.R` | HydroBASINS L12 ≤ 100 km upstream of downstream AOI (+ 5 km buffer) |
+
+Raster scripts (03–07) mask to `upstream_aoi`. Demand and population scripts use `downstream_aoi`.
+
+---
+
+## Run
+
+```r
+source("packages.R")   # one-time
+
+# Drop datasets into data/raw/<local_path> per data_sources.csv, then:
+for (f in sort(list.files("R", pattern = "^[0-9]{2}_.*\\.R$", full.names = TRUE))) {
+  message("→ ", f)
+  source(f)
+}
+```
+
+Set `FLOOD_SCENARIO=wettest_month` (default) before `99_figures_tables.R` if you want a different precip scenario folder under `data/processed/runoff/`.
+
+QA previews land in `output/figures/qa/`. Final figures and tables in `output/figures/` and `output/tables/`.
+
+---
+
+## Data
+
+- [`data_sources.csv`](data_sources.csv) — machine-readable registry (`id`, `local_path`, licence, …)
+- [`lookup/`](lookup/) — CN tables, class codes, crop vulnerability scores
+
+Download each layer by hand into `data/raw/<local_path>`.

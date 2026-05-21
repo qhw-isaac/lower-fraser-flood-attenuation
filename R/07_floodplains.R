@@ -1,17 +1,20 @@
 # ==============================================================================
-# 06_floodplains.R — floodplain raster used to mask "demand" pixels
+# 07_floodplains.R — floodplain raster used to mask "demand" pixels
 # ------------------------------------------------------------------------------
 # Mirrors Duarte's `scripts_OSF/01_harmonize/02_floodplains.R`
 #
+# Inputs (data/processed/):
+#   03_lulc_values.tif   (grid template)
+#
 # Outputs (data/processed/):
-#   06_floodplain.tif    — 0/1 raster on the working grid
+#   07_floodplain.tif    — 0/1 raster on the working grid
 # ==============================================================================
 
 source(here::here("R", "00_setup.R"))
 
-lulc_path <- file.path(paths()$processed, "02_lulc_values.tif")
+lulc_path <- file.path(paths()$processed, "03_lulc_values.tif")
 if (!file.exists(lulc_path)) {
-  stop("02_lulc_values.tif not found — run R/02_lulc.R before floodplains")
+  stop("03_lulc_values.tif not found — run R/03_lulc.R before floodplains")
 }
 lulc_grid <- terra::rast(lulc_path)
 
@@ -29,10 +32,10 @@ if (ext %in% c("tif", "tiff")) {
 outcome_aoi <- read_aoi("outcome")
 fp <- terra::mask(fp, terra::rasterize(terra::vect(outcome_aoi), fp, field = 1))
 
-safe_writeRaster(fp, file.path(paths()$processed, "06_floodplain.tif"))
+safe_writeRaster(fp, file.path(paths()$processed, "07_floodplain.tif"))
 
 # ---- QA preview --------------------------------------------------------------
-qa_png("06_floodplain.png", function() {
+qa_png("07_floodplain.png", function() {
   op <- graphics::par(mar = c(2, 2, 3, 6))
   on.exit(graphics::par(op), add = TRUE)
   terra::plot(fp, main = "Floodplain mask (Mohanty CMIP6 100-yr; 1 = inundated)",
@@ -40,4 +43,4 @@ qa_png("06_floodplain.png", function() {
               col = c("grey90", "#3182bd"))
 })
 
-message("✓ 06_floodplains.R — wrote floodplain raster (Mohanty CMIP6 100-yr; swap to FBC when handoff wired)")
+message("✓ 07_floodplains.R — wrote floodplain raster (Mohanty CMIP6 100-yr; swap to FBC when handoff wired)")

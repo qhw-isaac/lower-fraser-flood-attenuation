@@ -1,5 +1,5 @@
 # ==============================================================================
-# 03_soils.R — Hydrologic Soil Group (HSG) raster
+# 04_soils.R — Hydrologic Soil Group (HSG) raster
 # ------------------------------------------------------------------------------
 # BC Soil Survey polygons mapped to USDA-HSG
 # Priority: drain lookup → texture lookup → HYSOGs250m → D-fill
@@ -8,10 +8,11 @@
 #   data_path("bc_soil_survey"), data_path("hysogs250m"),
 #   here("lookup/bc_drainage_to_hsg.csv")
 #   here("lookup/bc_texture_to_hsg.csv")
+#   data/processed/03_lulc_values.tif
 #
 # Outputs (data/processed/):
-#   03_hsg.tif          — integer HSG raster (1=A, 2=B, 3=C, 4=D), working grid
-#   03_hsg_source.tif   — source data set (1=BC SSI drain, 2=BC SSI texture,
+#   04_hsg.tif          — integer HSG raster (1=A, 2=B, 3=C, 4=D), working grid
+#   04_hsg_source.tif   — source data set (1=BC SSI drain, 2=BC SSI texture,
 #                                          3=HYSOGs250m, 4=D-fill)
 # ==============================================================================
 
@@ -79,7 +80,7 @@ bc_r     <- terra::rasterize(terra::vect(soils), template, field = "hsg", touche
 bc_r_src <- terra::rasterize(terra::vect(soils), template, field = "hsg_src_poly", touches = TRUE)
 bc_r_src <- terra::classify(bc_r_src, cbind(-2147483648, NA))
 
-lulc <- terra::rast(file.path(paths()$processed, "02_lulc_values.tif"))
+lulc <- terra::rast(file.path(paths()$processed, "03_lulc_values.tif"))
 
 hy <- terra::rast(data_path("hysogs250m")) |> align_to_grid(method = "near")
 hy <- terra::ifel(hy %in% c(11, 12, 13, 14), 4, hy)
@@ -93,8 +94,8 @@ hsg_src <- terra::ifel(!is.na(bc_r_src), bc_r_src,
                                    terra::ifel(!is.na(hsg), 4L, NA)))
 hsg_src <- terra::mask(hsg_src, lulc)
 
-safe_writeRaster(hsg, file.path(paths()$processed, "03_hsg.tif"))
-safe_writeRaster(hsg_src, file.path(paths()$processed, "03_hsg_source.tif"))
+safe_writeRaster(hsg, file.path(paths()$processed, "04_hsg.tif"))
+safe_writeRaster(hsg_src, file.path(paths()$processed, "04_hsg_source.tif"))
 
 src_freq <- terra::freq(hsg_src)
 src_lab <- c(`1` = "BC SSI drain mapped",
@@ -111,7 +112,7 @@ for (i in seq_len(nrow(src_freq))) {
                   100 * src_freq$count[i] / total_px))
 }
 
-qa_png("03_hsg.png", ncol = 2, function() {
+qa_png("04_hsg.png", ncol = 2, function() {
   op <- graphics::par(mfrow = c(1, 2), mar = c(2, 2, 3, 2), oma = c(0, 0, 0, 10))
   on.exit(graphics::par(op), add = TRUE)
   
@@ -132,4 +133,4 @@ qa_png("03_hsg.png", ncol = 2, function() {
               col = c("#1b9e77", "#a6d854", "#d95f02", "#7570b3"))
 })
 
-message("✓ 03_soils.R — wrote HSG raster (BC soil survey mosaic with HYSOGs250m)")
+message("✓ 04_soils.R — wrote HSG raster (BC soil survey mosaic with HYSOGs250m)")

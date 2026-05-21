@@ -1,34 +1,30 @@
 # ==============================================================================
-# 07_subbasins.R — Sub-basin polygons + topology + upstream-AOI refinement
+# 02_subbasins.R — Sub-basin polygons + topology + upstream AOI
 # ------------------------------------------------------------------------------
-# Mirrors Duarte's `scripts_OSF/01_harmonize/02_hydrobasins.R`, but trims
-# HydroBASINS L12 to only those polygons that lie ≤ MAX_FLOW_DIST_KM upstream
-# of the downstream AOI.
+# Walks the HydroBASINS L12 NEXT_DOWN graph upstream from the downstream AOI
+# and keeps every sub-basin within ≤ MAX_FLOW_DIST_KM flow distance.
 #
-#   (1) Load HydroBASINS L12 (see data_sources hydrobasins_l12: flat
-#       `hydrology/hydrobasins_l12.*` bundle — swap to HydroSHEDS *lake* polygons
-#       for Duarte OSF parity while keeping the same basename pattern),
-#       traverse the NEXT_DOWN graph upstream from the downstream AOI to find
-#       every sub-basin within ≤ MAX_FLOW_DIST_KM flow distance — the
-#       "upstream set".
+# Runs before the raster scripts (03–07) so they inherit the hydrologically
+# refined upstream AOI rather than a regional-district placeholder, which
+# would clip basins draining into the Lower Mainland from outside MVRD ∪ FVRD
+# ∪ SLRD (e.g. Fraser/Thompson basins through TNRD).
 #
-#   (2) Tag each sub-basin with:
-#         HYBAS_ID, NEXT_DOWN, SUB_AREA, DIST_SINK, LAKE, ENDO  (HydroBASINS)
-#         in_downstream_aoi  (centroid in downstream AOI)
-#         in_outcome_aoi     (centroid in outcome AOI)
-#         is_sink            (LAKE ≥ 1 & SUB_AREA ≥ LAKE_SINK_KM2  OR  ENDO == 2)
-#         admin_district     (MVRD / FVRD / SLRD / Other — for reporting joins)
-#
-#   (3) Overwrite 01_aoi_upstream.gpkg with the hydrologically refined extent.
+# Sub-basin tags:
+#   HYBAS_ID, NEXT_DOWN, SUB_AREA, DIST_SINK, LAKE, ENDO   (HydroBASINS)
+#   in_downstream_aoi, in_outcome_aoi                      (centroid tests)
+#   is_sink                                                (LAKE ≥ 1 & SUB_AREA
+#                                                           ≥ LAKE_SINK_KM2
+#                                                           OR ENDO == 2)
+#   admin_district                                         (MVRD/FVRD/SLRD/Other)
 #
 # Inputs:
 #   data_path("hydrobasins_l12")
-#   data/processed/01_aoi_*.gpkg
+#   data/processed/01_aoi_outcome.gpkg, 01_aoi_downstream.gpkg
 #
 # Outputs (data/processed/):
-#   07_subbasins.gpkg            polygon layer with all tags above
-#   07_topology.csv              focal_id, ds_id, reach_km   (DIST_SINK-derived)
-#   01_aoi_upstream.gpkg         refined — overwrites 01_aoi.R placeholder
+#   02_subbasins.gpkg     sub-basin polygons + tags
+#   02_topology.csv       focal_id, ds_id, reach_km   (DIST_SINK-derived)
+#   01_aoi_upstream.gpkg  hydrologically refined upstream AOI
 # ==============================================================================
 
 source(here::here("R", "00_setup.R"))
@@ -40,13 +36,13 @@ hb <- sf::st_read(data_path("hydrobasins_l12"), quiet = TRUE) |>
 hb$LAKE[is.na(hb$LAKE)] <- 0L
 hb$ENDO[is.na(hb$ENDO)] <- 0L
 
-# preclip to save resources
-prelim <- read_aoi("upstream") |>
-  sf::st_buffer(MAX_FLOW_DIST_KM * 1000 + EDGE_BUFFER_M)
+# preclip to save resources: anything within MAX_FLOW_DIST_KM (+ edge buffer)
+# of the downstream AOI is a candidate upstream provider.
+downstream_aoi <- read_aoi("downstream")
+prelim <- sf::st_buffer(downstream_aoi, MAX_FLOW_DIST_KM * 1000 + EDGE_BUFFER_M)
 hb <- hb[as.logical(sf::st_intersects(hb, prelim, sparse = FALSE)), ]
 
 # ---- 2. Trim to ≤ MAX_FLOW_DIST_KM upstream of downstream AOI ----------------
-downstream_aoi <- read_aoi("downstream")
 outlet_idx <- as.logical(sf::st_intersects(hb, downstream_aoi, sparse = FALSE))
 outlet_ids <- hb$HYBAS_ID[outlet_idx]
 
@@ -115,7 +111,7 @@ if (requireNamespace("bcmaps", quietly = TRUE)) {
 }
 
 # ---- 4. Persist sub-basin layer ----------------------------------------------
-sf::st_write(hb, file.path(paths()$processed, "07_subbasins.gpkg"),
+sf::st_write(hb, file.path(paths()$processed, "02_subbasins.gpkg"),
              delete_dsn = TRUE, quiet = TRUE)
 
 # ---- 5. Topology CSV (focal → next_down with reach length km) ----------------
@@ -129,9 +125,9 @@ topo <- hb |>
   ) |>
   dplyr::mutate(reach_km = pmax(DIST_SINK - ds_dist, 0)) |>
   dplyr::select(focal_id, ds_id, reach_km)
-readr::write_csv(topo, file.path(paths()$processed, "07_topology.csv"))
+readr::write_csv(topo, file.path(paths()$processed, "02_topology.csv"))
 
-# ---- 6. Refine upstream AOI --------------------------------------------------
+# ---- 6. Refined upstream AOI -------------------------------------------------
 refined <- hb |>
   sf::st_union() |>
   sf::st_buffer(EDGE_BUFFER_M) |>
@@ -140,7 +136,7 @@ sf::st_write(refined, file.path(paths()$processed, "01_aoi_upstream.gpkg"),
              delete_dsn = TRUE, quiet = TRUE)
 
 # ---- QA preview --------------------------------------------------------------
-qa_png("07_subbasins.png", panel_w = 1200, function() {
+qa_png("02_subbasins.png", panel_w = 1200, function() {
   op <- graphics::par(mar = c(2, 2, 4, 1), oma = c(0, 0, 1, 0))
   on.exit(graphics::par(op), add = TRUE)
   plot(hb["flow_dist_km"],
@@ -152,5 +148,5 @@ qa_png("07_subbasins.png", panel_w = 1200, function() {
   plot(sf::st_geometry(outcome_aoi),    add = TRUE, border = "red",   lwd = 1.2)
 })
 
-message("✓ 07_subbasins.R — refined 01_aoi_upstream.gpkg (", nrow(hb),
-        " HydroBASINS L12 polygons)")
+message("✓ 02_subbasins.R — wrote 02_subbasins.gpkg + 01_aoi_upstream.gpkg (",
+        nrow(hb), " HydroBASINS L12 polygons)")

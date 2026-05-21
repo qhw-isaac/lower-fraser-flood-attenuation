@@ -1,5 +1,5 @@
 # ==============================================================================
-# 05_precipitation.R — Wettest-month precipitation raster (P, in mm)
+# 06_precipitation.R — Wettest-month precipitation raster (P, in mm)
 # ------------------------------------------------------------------------------
 # PCIC PRISM 800 m monthly normals — pixel-wise max across 12 months, matching
 # the CHELSA bio13 (precipitation of wettest month) convention used in
@@ -19,10 +19,11 @@
 # corridor flood-prone.
 #
 # Inputs:
-#   data_path("prism_pcic")   PCIC PRISM 800 m monthly normals (12 bands)
+#   data_path("prism_pcic")           PCIC PRISM 800 m monthly normals (12 bands)
+#   data/processed/03_lulc_values.tif (mask)
 #
 # Outputs (data/processed/precip/):
-#   05_p_wettest_month.tif    wettest-month P (mm), aligned to working grid
+#   06_p_wettest_month.tif    wettest-month P (mm), aligned to working grid
 # ==============================================================================
 source(here::here("R", "00_setup.R"))
 
@@ -34,18 +35,18 @@ prism <- terra::rast(data_path("prism_pcic")) |> align_to_grid(method = "bilinea
 
 p <- terra::app(prism, fun = max, na.rm = TRUE)
 
-lulc <- terra::rast(file.path(paths()$processed, "02_lulc_values.tif"))
+lulc <- terra::rast(file.path(paths()$processed, "03_lulc_values.tif"))
 
 p <- terra::mask(p, lulc)
 
-safe_writeRaster(p, file.path(precip_dir, "05_p_wettest_month.tif"))
+safe_writeRaster(p, file.path(precip_dir, "06_p_wettest_month.tif"))
 
 # ---- QA preview --------------------------------------------------------------
-qa_png("05_p_wettest_month.png", function() {
+qa_png("06_p_wettest_month.png", function() {
   op <- graphics::par(mar = c(2, 2, 3, 6))
   on.exit(graphics::par(op), add = TRUE)
   terra::plot(p, main = "Wettest-month precipitation (mm; PRISM 800 m, pixel-wise max)",
               col = grDevices::hcl.colors(50, palette = "Blues 3", rev = TRUE))
 })
 
-message("✓ 05_precipitation.R — wrote wettest-month P raster (mm)")
+message("✓ 06_precipitation.R — wrote wettest-month P raster (mm)")

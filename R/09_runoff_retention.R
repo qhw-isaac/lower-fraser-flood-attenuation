@@ -12,11 +12,11 @@
 #   PRR (in)         =  Q_counterfactual − Q_baseline
 #   PRR (mm)         =  PRR (in) × 25.4
 #
-# P is supplied in mm by 05_precipitation.R and converted to inches before 
+# P is supplied in mm by 06_precipitation.R and converted to inches before
 # applying the SCS equation, then PRR is converted back to mm; downstream rasters are in metric.
 #
 # Inputs (data/processed/):
-#   precip/05_p_<scenario>.tif
+#   precip/06_p_<scenario>.tif
 #   08_cn_baseline_slopeadj.tif
 #   08_cn_counterfactual_slopeadj.tif
 #
@@ -44,13 +44,13 @@ precip_dir <- file.path(paths()$processed, "precip")
 runoff_dir <- file.path(paths()$processed, "runoff")
 dir.create(runoff_dir, showWarnings = FALSE, recursive = TRUE)
 
-scenarios <- list.files(precip_dir, pattern = "^05_p_.*\\.tif$", full.names = TRUE)
+scenarios <- list.files(precip_dir, pattern = "^06_p_.*\\.tif$", full.names = TRUE)
 if (length(scenarios) == 0) {
-  stop("no precipitation scenarios in ", precip_dir, " — run 05_precipitation.R")
+  stop("no precipitation scenarios in ", precip_dir, " — run 06_precipitation.R")
 }
 
 for (p_tif in scenarios) {
-  scen <- sub("^05_p_", "", tools::file_path_sans_ext(basename(p_tif)))
+  scen <- sub("^06_p_", "", tools::file_path_sans_ext(basename(p_tif)))
   out  <- file.path(runoff_dir, scen)
   dir.create(out, showWarnings = FALSE, recursive = TRUE)
 

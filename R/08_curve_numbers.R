@@ -14,8 +14,8 @@
 #                       CN                                       otherwise
 #
 # Inputs (data/processed/):
-#   02_lulc_values.tif, 02_lulc_natural_mask.tif
-#   03_hsg.tif, 04_slope_deg.tif
+#   03_lulc_values.tif, 03_lulc_natural_mask.tif
+#   04_hsg.tif, 05_slope_deg.tif
 #   lookup/cn_lookup.csv
 #
 # Outputs (data/processed/):
@@ -28,9 +28,9 @@
 source(here::here("R", "00_setup.R"))
 
 # load in previous script outputs
-lulc      <- terra::rast(file.path(paths()$processed, "02_lulc_values.tif"))
-hsg       <- terra::rast(file.path(paths()$processed, "03_hsg.tif"))
-slope_deg <- terra::rast(file.path(paths()$processed, "04_slope_deg.tif"))
+lulc      <- terra::rast(file.path(paths()$processed, "03_lulc_values.tif"))
+hsg       <- terra::rast(file.path(paths()$processed, "04_hsg.tif"))
+slope_deg <- terra::rast(file.path(paths()$processed, "05_slope_deg.tif"))
 
 # Curve Number lookup table formatting
 cn_tbl <- readr::read_csv(here::here("lookup", "cn_lookup.csv"),

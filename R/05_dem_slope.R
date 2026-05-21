@@ -1,5 +1,5 @@
 # ==============================================================================
-# 04_dem_slope.R — DEM and slope raster
+# 05_dem_slope.R — DEM and slope raster
 # ------------------------------------------------------------------------------
 # Mirrors Duarte's `scripts_OSF/01_harmonize/02_slope.R` but with Copernicus
 # GLO-30 in place of HydroSHEDS:
@@ -10,9 +10,12 @@
 # HRDEM (NRCan LiDAR, 1–2 m) is parked in `R/extensions/prep_hrdem_mosaic.R`
 # as a Phase-2 upgrade
 #
+# Inputs (data/processed/):
+#   03_lulc_values.tif
+#
 # Outputs (data/processed/):
-#   04_dem.tif          — DEM on the working grid (GLO-30)
-#   04_slope_deg.tif    — slope in *degrees*
+#   05_dem.tif          — DEM on the working grid (GLO-30)
+#   05_slope_deg.tif    — slope in *degrees*
 #
 # Notes:
 #   - Duarte's slope unit (degrees) is preserved because 08_curve_numbers.R
@@ -26,13 +29,13 @@ message("  · loading DEM 'dem_glo30' from ", dem_path)
 dem <- terra::rast(dem_path) |> align_to_grid(method = "bilinear")
 
 slope_real <- terra::terrain(dem, v = "slope", neighbors = 8, unit = "degrees")
-lulc <- terra::rast(file.path(paths()$processed, "02_lulc_values.tif"))
+lulc <- terra::rast(file.path(paths()$processed, "03_lulc_values.tif"))
 slope_deg <- terra::ifel(is.na(slope_real) & !is.na(lulc), 10, slope_real)
 aoi_mask <- terra::rasterize(terra::vect(read_aoi("upstream")), slope_deg, field = 1)
 slope_deg <- terra::mask(slope_deg, aoi_mask)
 
-safe_writeRaster(dem, file.path(paths()$processed, "04_dem.tif"))
-safe_writeRaster(slope_deg, file.path(paths()$processed, "04_slope_deg.tif"))
+safe_writeRaster(dem, file.path(paths()$processed, "05_dem.tif"))
+safe_writeRaster(slope_deg, file.path(paths()$processed, "05_slope_deg.tif"))
 
 # coverage diagnostic
 land_mask <- !is.na(lulc)
@@ -54,7 +57,7 @@ if (fill_px / total_px > 0.05) {
 }
 
 # ---- QA preview --------------------------------------------------------------
-qa_png("04_dem_slope.png", function() {
+qa_png("05_dem_slope.png", function() {
   op <- graphics::par(mar = c(2, 2, 3, 7))
   on.exit(graphics::par(op), add = TRUE)
   terra::plot(slope_deg, main = "Slope (degrees)",
@@ -62,4 +65,4 @@ qa_png("04_dem_slope.png", function() {
               range = c(0, 60))
 })
 
-message("✓ 04_dem_slope.R — wrote DEM + slope (deg) from GLO-30")
+message("✓ 05_dem_slope.R — wrote DEM + slope (deg) from GLO-30")
