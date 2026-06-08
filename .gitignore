@@ -80,9 +80,4 @@ lookup/
 
 # temp hide
 00_setup.R
-10_demand.R
-11_routing_decay.R
-12_realized_benefit.R
-13_population.R
-99_figures_tables.R
 prep_hrdem_mosaic.R
