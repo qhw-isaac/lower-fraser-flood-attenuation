@@ -81,3 +81,6 @@ lookup/
 # temp hide
 00_setup.R
 prep_hrdem_mosaic.R
+output/interactive_map/
+14_interactive_map.R
+15_commodities.R

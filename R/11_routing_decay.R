@@ -9,11 +9,20 @@
 #
 #       TDA_j = Σ_{i ∈ downstream(j)} demand_i × 0.5^(d_ji / HALFLIFE_KM)
 #
-# stopping at sinks (LAKE ≥ 1 with SUB_AREA ≥ LAKE_SINK_KM2, or ENDO == 2)
-# and at MAX_FLOW_DIST_KM. Implementation: bottom-up traversal of the
-# directed graph from sinks upward; each node's TDA is computed in O(deg)
-# from its NEXT_DOWN's TDA — same shape as Duarte's loop, but vectorised
-# via topological order from igraph.
+# This reproduces Duarte's `05_downstream_..._distance_decay`, with one
+# parameter change: HALFLIFE_KM = 20 km here vs. their threshold_dist = 100 km.
+# The half-life is rescaled to this study's ~100 km Hope-to-coast domain
+# (5 half-lives ≈ MAX_FLOW_DIST_KM) rather than Duarte's Canada-wide reach.
+#
+# Routing stops at sinks (LAKE ≥ 1 with SUB_AREA ≥ LAKE_SINK_KM2, or ENDO == 2).
+# Duarte run their decay all the way to the ocean sink with no distance cutoff;
+# we match that — there is *no* per-path distance cap inside this loop. The
+# MAX_FLOW_DIST_KM bound is enforced once, upstream, when 02_subbasins.R trims
+# the domain, so every basin the graph can reach is already within that range.
+#
+# Implementation: bottom-up traversal of the directed graph from sinks upward;
+# each node's TDA is computed in O(deg) from its NEXT_DOWN's TDA — same result
+# as Duarte's per-basin while-loop, but vectorised via igraph topological order.
 #
 # Inputs (data/processed/):
 #   02_subbasins.gpkg, 02_topology.csv
@@ -72,10 +81,15 @@ rownames(demand_mat) <- as.character(sb$HYBAS_ID)
 ds_id   <- setNames(topo$ds_id,   as.character(topo$focal_id))
 reach_km <- setNames(topo$reach_km, as.character(topo$focal_id))
 
-# Bottom-up TDA accumulation. order_ids is "sources first, sinks last"
-# `tda_partial`: contribution to TDA from each downstream node, *as seen at*
-# this node — built up by halving along each reach.
-tda <- demand_mat            # initialize: own demand sits at distance 0
+# Bottom-up TDA accumulation. We process sinks first, sources last (rev of the
+# topological order), so a node's NEXT_DOWN is always finalised before the node
+# itself. Each node then inherits its NEXT_DOWN's *entire* accumulated TDA,
+# halved once for the single reach between them. Because that halving compounds
+# reach by reach up the chain, a beneficiary i lands at node j carrying the
+# product of every reach's decay — i.e. 0.5^(Σ reaches / HALFLIFE) =
+# 0.5^(d_ji / HALFLIFE). That telescoping is exactly Duarte's cumulative
+# DIST_SINK[start] − DIST_SINK[i] decay, just computed incrementally.
+tda <- demand_mat            # initialise: own demand sits at distance 0
 walk <- rev(order_ids)
 for (id in walk) {
   k <- as.character(id)

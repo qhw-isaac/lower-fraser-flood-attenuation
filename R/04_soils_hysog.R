@@ -1,0 +1,148 @@
+# ==============================================================================
+# 04_soils_hysog.R — Hydrologic Soil Group (HSG) raster, HYSOGs250m ONLY
+# ------------------------------------------------------------------------------
+# Scenario / consistency variant of 04_soils.R.
+#
+# This script uses HYSOGs250m as the sole soil source so the soil layer is
+# globally consistent. It writes the same outputs read by 08_curve_numbers.R:
+#
+#   04_hsg.tif        — integer HSG raster, 1=A, 2=B, 3=C, 4=D
+#   04_hsg_source.tif — source raster, 3=HYSOGs250m, 4=D-fill
+#
+# Run this script instead of 04_soils.R to activate the HYSOG-only scenario.
+# Both scripts overwrite 04_hsg.tif, so whichever one you ran last is active.
+#
+# HYSOGs250m encoding:
+#   1,2,3,4      = HSG A, B, C, D
+#   11,12,13,14  = dual groups A/D, B/D, C/D, D/D
+#
+# Dual groups are collapsed to D here.
+# ==============================================================================
+
+source(here::here("R", "00_setup.R"))
+
+# ---- Inputs ------------------------------------------------------------------
+
+lulc <- terra::rast(file.path(paths()$processed, "03_lulc_values.tif"))
+
+hy <- terra::rast(data_path("hysogs250m"))
+
+# ---- Align HYSOGs250m to exact LULC working grid ------------------------------
+
+# First use project/resample through your project helper if available.
+hy <- hy |> align_to_grid(method = "near")
+
+# Then force exact geometry match to the LULC raster.
+# This avoids terra::ifel() errors from slightly mismatched extents/origins.
+if (!terra::compareGeom(hy, lulc, stopOnError = FALSE)) {
+  message("Aligning HYSOG raster exactly to LULC grid...")
+  hy <- terra::resample(hy, lulc, method = "near")
+}
+
+# Final safety check.
+if (!terra::compareGeom(hy, lulc, stopOnError = FALSE)) {
+  stop("HYSOG and LULC rasters still do not have matching geometry after resampling.")
+}
+
+# ---- Reclass HYSOGs250m values ------------------------------------------------
+
+# Collapse dual groups to D.
+hy <- terra::ifel(hy %in% c(11, 12, 13, 14), 4L, hy)
+
+# Keep only valid A-D HSG codes.
+# Everything else becomes NA so HYSOG water/no-data does not leak into CN.
+hy <- terra::ifel(hy %in% 1:4, hy, NA)
+
+# ---- D-fill within LULC footprint --------------------------------------------
+
+# Where LULC exists but HYSOG has no soil value, assign D.
+# This mirrors 04_soils.R so the scenarios differ only by soil source.
+hsg <- terra::ifel(is.na(hy), 4L, hy)
+
+# Mask to exact LULC footprint.
+hsg <- terra::mask(hsg, lulc)
+
+# Source raster:
+#   3 = HYSOGs250m where HYSOG had valid soil
+#   4 = D-fill where LULC exists but HYSOG was NA
+hsg_src <- terra::ifel(
+  !is.na(hy),
+  3L,
+  terra::ifel(!is.na(hsg), 4L, NA)
+)
+
+hsg_src <- terra::mask(hsg_src, lulc)
+
+# ---- Outputs -----------------------------------------------------------------
+
+safe_writeRaster(hsg,     file.path(paths()$processed, "04_hsg.tif"))
+safe_writeRaster(hsg_src, file.path(paths()$processed, "04_hsg_source.tif"))
+
+# ---- Source diagnostics ------------------------------------------------------
+
+src_freq <- terra::freq(hsg_src)
+
+src_lab <- c(
+  `3` = "HYSOGs250m",
+  `4` = "D-fill (no soil data)"
+)
+
+total_px <- sum(src_freq$count, na.rm = TRUE)
+
+message("HSG source coverage:")
+
+for (i in seq_len(nrow(src_freq))) {
+  k <- as.character(src_freq$value[i])
+  
+  message(sprintf(
+    "  · %-24s %10d px  (%5.1f%%)",
+    src_lab[k],
+    src_freq$count[i],
+    100 * src_freq$count[i] / total_px
+  ))
+}
+
+# ---- QA preview --------------------------------------------------------------
+
+qa_png("04_hsg_hysog.png", ncol = 2, function() {
+  op <- graphics::par(
+    mfrow = c(1, 2),
+    mar = c(2, 2, 3, 2),
+    oma = c(0, 0, 0, 10)
+  )
+  
+  on.exit(graphics::par(op), add = TRUE)
+  
+  terra::plot(
+    hsg,
+    main = "Hydrologic Soil Group\n(HYSOGs250m only)",
+    type = "classes",
+    levels = c(
+      "A (sand)",
+      "B (loam)",
+      "C (clay loam)",
+      "D (clay)"
+    ),
+    col = c("#fee08b", "#fdae61", "#d73027", "#7f0000"),
+    background = "lightgrey"
+  )
+  
+  hsg_src_labeled <- terra::categories(
+    hsg_src,
+    value = data.frame(
+      id = c(3L, 4L),
+      label = c("HYSOGs250m", "D-fill")
+    )
+  )
+  
+  terra::plot(
+    hsg_src_labeled,
+    main = "HSG source",
+    type = "classes",
+    col = c("#d95f02", "#7570b3"),
+    background = "lightgrey"
+  )
+})
+
+message("✓ 04_soils_hysog.R — wrote HSG raster using HYSOGs250m only.")
+message("✓ Active soil basis for 08+ is now HYSOGs250m-only.")

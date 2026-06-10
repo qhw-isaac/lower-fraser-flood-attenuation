@@ -38,8 +38,18 @@ R/
 │                           ── realised benefit (Duarte 04) ──
 ├── 12_realized_benefit.R   PRR × TDA → RI + percentile intervals
 ├── 13_population.R         benefiting population by RI interval
+├── 14_interactive_map.R    web data for the shared-watersheds interactive map
 └── 99_figures_tables.R     publication figures + summary tables
 ```
+
+The **interactive map** (`output/interactive_map/index.html`) lets you click a
+sub-basin to see its upstream ecosystems, click municipalities to find their
+upstream protectors, and surface the watersheds that protect *multiple*
+municipalities — the cross-jurisdiction coordination view. Built by
+`14_interactive_map.R`; double-click `index.html` to open. It stays in sync with
+the model: re-run `R/14_interactive_map.R` after any pipeline change to refresh
+`data.js` (see [`output/interactive_map/README.md`](output/interactive_map/README.md)
+for the input→dashboard contract).
 
 Every script sources `00_setup.R`, reads raw data via `data_path("layer_id")` from `data_sources.csv`, and writes to `data/processed/` (or `output/` for 99).
 
