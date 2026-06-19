@@ -1,17 +1,13 @@
 # ==============================================================================
 # 08_curve_numbers.R — Curve Number raster + Huang slope correction
 # ------------------------------------------------------------------------------
-# Duarte's CN raster is a fraction-weighted mean across classes within each
-# 240 m cell. At 30m resolution each pixel has exactly one class,
-# so the weighted mean = a direct (lulc, hsg) to CN look up.
-#
 # Algorithm (per pixel):
 #
-#   CN_baseline       = CN[ lulc, hsg ]
-#   CN_counterfactual = CN[ replace_natural_with_barren(lulc), hsg ]
-#   α                 = slope_deg / 100 # Huang convention
-#   CN_slopeadj       = CN × (322.79 + 15.63·α) / (α + 323.52)   if α ≥ 0.14
-#                       CN                                       otherwise
+#   CN_baseline = CN[lulc, hsg]
+#   CN_counterfactual = CN[replace_natural_with_barren(lulc), hsg]
+#   a = slope_deg / 100 # Huang et al.
+#   CN_slopeadj = if a ≥ 0.14: CN × (322.79 + 15.63*a) / (a + 323.52)
+#                 CN otherwise
 #
 # Inputs (data/processed/):
 #   03_lulc_values.tif, 03_lulc_natural_mask.tif
@@ -28,8 +24,8 @@
 source(here::here("R", "00_setup.R"))
 
 # load in previous script outputs
-lulc      <- terra::rast(file.path(paths()$processed, "03_lulc_values.tif"))
-hsg       <- terra::rast(file.path(paths()$processed, "04_hsg.tif"))
+lulc <- terra::rast(file.path(paths()$processed, "03_lulc_values.tif"))
+hsg <- terra::rast(file.path(paths()$processed, "04_hsg.tif"))
 slope_deg <- terra::rast(file.path(paths()$processed, "05_slope_deg.tif"))
 
 # Curve Number lookup table formatting
@@ -41,13 +37,13 @@ cn_tbl <- readr::read_csv(here::here("lookup", "cn_lookup.csv"),
   dplyr::select(lulc_code, hsg, cn) |>
   dplyr::filter(!is.na(cn))
 
-# Barren counterfactual: replace every natural NALCMS class with code 16 (Barren).
+# barren counterfactual: replace every natural NALCMS class with code 16 (Barren)
 nalcms_codes <- readr::read_csv(here::here("lookup", "nalcms_classes.csv"),
                                 show_col_types = FALSE)
 
 natural_codes <- nalcms_codes$nalcms_code[nalcms_codes$is_natural]
 
-BARREN_CODE   <- 16L
+BARREN_CODE <- 16L
 
 # ---- CN rasters --------------------------------------------------------------
 # baseline CN
@@ -66,10 +62,10 @@ cn_cf <- lulc_cf
 terra::values(cn_cf) <- df_cf$cn
 
 safe_writeRaster(cn_baseline, file.path(paths()$processed, "08_cn_baseline.tif"))
-safe_writeRaster(cn_cf,       file.path(paths()$processed, "08_cn_counterfactual.tif"))
+safe_writeRaster(cn_cf, file.path(paths()$processed, "08_cn_counterfactual.tif"))
 
 # ---- Huang slope correction --------------------------------------------------
-alpha <- slope_deg / 100  # Duarte/Huang convention: degrees / 100 ≈ m/m
+alpha <- slope_deg / 100 # Duarte/Huang convention: degrees / 100 ≈ m/m
 slope_factor <- (322.79 + 15.63 * alpha) / (alpha + 323.52)
 
 cn_baseline_adj <- terra::ifel(alpha >= 0.14, cn_baseline * slope_factor, cn_baseline)
@@ -79,7 +75,7 @@ cn_cf_adj <- terra::ifel(alpha >= 0.14, cn_cf * slope_factor, cn_cf)
 cn_cf_adj <- terra::ifel(cn_cf_adj > 100, 100, cn_cf_adj)
 
 safe_writeRaster(cn_baseline_adj, file.path(paths()$processed, "08_cn_baseline_slopeadj.tif"))
-safe_writeRaster(cn_cf_adj,       file.path(paths()$processed, "08_cn_counterfactual_slopeadj.tif"))
+safe_writeRaster(cn_cf_adj, file.path(paths()$processed, "08_cn_counterfactual_slopeadj.tif"))
 
 # ---- QA preview --------------------------------------------------------------
 # 3 panel baseline vs barren counterfactual vs difference
