@@ -1,21 +1,18 @@
 # ==============================================================================
 # 07_floodplains.R — floodplain raster used to mask "demand" pixels
 # ------------------------------------------------------------------------------
-# Mirrors Duarte's `scripts_OSF/01_harmonize/02_floodplains.R`
+# Creates the floodplain used in subsequent analysis.
 #
 # Inputs (data/processed/):
-#   03_lulc_values.tif   (grid template)
+#   03_lulc_values.tif
 #
 # Outputs (data/processed/):
-#   07_floodplain.tif    — 0/1 raster on the working grid
+#   07_floodplain.tif
 # ==============================================================================
 
 source(here::here("R", "00_setup.R"))
 
 lulc_path <- file.path(paths()$processed, "03_lulc_values.tif")
-if (!file.exists(lulc_path)) {
-  stop("03_lulc_values.tif not found — run R/03_lulc.R before floodplains")
-}
 lulc_grid <- terra::rast(lulc_path)
 
 fp_path <- data_path("mohanty_floodplain_100yr")
@@ -29,8 +26,9 @@ if (ext %in% c("tif", "tiff")) {
   fp <- terra::rasterize(terra::vect(v), lulc_grid, field = 1, background = 0)
 }
 
-outcome_aoi <- read_aoi("outcome")
-fp <- terra::mask(fp, terra::rasterize(terra::vect(outcome_aoi), fp, field = 1))
+# keep only floodplain inside the downstream AOI (where demand is evaluated)
+downstream_aoi <- read_aoi("downstream")
+fp <- terra::mask(fp, terra::rasterize(terra::vect(downstream_aoi), fp, field = 1))
 
 safe_writeRaster(fp, file.path(paths()$processed, "07_floodplain.tif"))
 
@@ -38,7 +36,8 @@ safe_writeRaster(fp, file.path(paths()$processed, "07_floodplain.tif"))
 qa_png("07_floodplain.png", function() {
   op <- graphics::par(mar = c(2, 2, 3, 6))
   on.exit(graphics::par(op), add = TRUE)
-  terra::plot(fp, main = "Floodplain mask (Mohanty CMIP6 100-yr; 1 = inundated)",
+  terra::plot(terra::trim(fp),
+              main = "Floodplain mask (Mohanty CMIP6 100-yr; 1 = inundated)",
               type = "classes", levels = c("dry", "floodplain"),
               col = c("grey90", "#3182bd"))
 })
