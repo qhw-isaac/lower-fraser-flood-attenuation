@@ -2,8 +2,8 @@
 # 99_figures_tables.R — Publication-ready figures + tables
 # ------------------------------------------------------------------------------
 # Reads finished artefacts from data/processed/ and output/tables/:
-#   - Fig 2:  PRR (mm) per pixel + RI interval per sub-basin
-#   - Fig 3:  Population exposure by RI interval (stacked + direct-only)
+#   - Fig 2: PRR (mm) per pixel + RI interval per sub-basin
+#   - Fig 3: Population exposure by RI interval (stacked + direct-only)
 #   - Table 1: RI interval summary × downstream beneficiaries
 # ==============================================================================
 
@@ -14,7 +14,7 @@ suppressPackageStartupMessages({
 })
 
 # ---- Scenario selection ------------------------------------------------------
-scen    <- Sys.getenv("FLOOD_SCENARIO", unset = "wettest_month")
+scen <- Sys.getenv("FLOOD_SCENARIO", unset = "wettest_month")
 rb_path <- file.path(paths()$processed, glue::glue("12_realised_benefit_{scen}_all.gpkg"))
 
 if (!file.exists(rb_path)) {
@@ -24,14 +24,14 @@ if (!file.exists(rb_path)) {
        paste(available, collapse = ", "))
 }
 
-rb  <- sf::st_read(rb_path, quiet = TRUE)
+rb <- sf::st_read(rb_path, quiet = TRUE)
 prr <- terra::rast(file.path(paths()$processed, "runoff", scen, "09_prr_mm.tif"))
 
 # Drop disconnected display patches smaller than min_px (figure-only cleanup).
 drop_small_patches <- function(r, min_px = 100L) {
   bin <- terra::ifel(!is.na(r), 1L, NA_integer_)
   ids <- terra::patches(bin, directions = 8)
-  pf  <- terra::freq(ids)
+  pf <- terra::freq(ids)
   if (is.null(pf) || nrow(pf) == 0L) return(r)
   keep <- pf$value[pf$count >= min_px]
   if (length(keep) == 0L) return(r)
@@ -41,7 +41,7 @@ drop_small_patches <- function(r, min_px = 100L) {
 # ---- Fig 2a: PRR per pixel ---------------------------------------------------
 sb_mask <- terra::rasterize(terra::vect(rb), prr, field = 1)
 src_cov <- terra::rast(file.path(paths()$processed, "03_lulc_source_coverage.tif"))
-nalcms  <- terra::rast(data_path("nalcms_2020")) |>
+nalcms <- terra::rast(data_path("nalcms_2020")) |>
   terra::project(prr, method = "near")
 
 prec_path <- file.path(paths()$processed, "precip", glue::glue("06_p_{scen}.tif"))
@@ -52,25 +52,25 @@ prec <- terra::rast(prec_path)
 
 in_domain <- !is.na(sb_mask) & !is.na(src_cov)
 model_mask <- in_domain & !is.na(prec)
-water      <- in_domain & nalcms == 18L
-snow_ice   <- in_domain & nalcms == 19L
+water <- in_domain & nalcms == 18L
+snow_ice <- in_domain & nalcms == 19L
 
 prr_display <- terra::mask(prr, model_mask, maskvalues = c(NA, FALSE))
 prr_display <- terra::ifel(is.na(prr_display) & snow_ice, 0, prr_display)
 water_overlay <- terra::ifel(water, 1, NA)
 
-# Crop to outcome AOI southern edge, then clean specks on the smaller extent.
-outcome_bb <- sf::st_bbox(read_aoi("outcome"))
-prr_bb     <- terra::ext(prr_display)
-data_ext   <- terra::ext(prr_bb[1], prr_bb[2], outcome_bb["ymin"], prr_bb[4])
+# Crop to the downstream AOI's southern edge, then clean specks on the smaller extent.
+down_bb <- sf::st_bbox(read_aoi("downstream"))
+prr_bb <- terra::ext(prr_display)
+data_ext <- terra::ext(prr_bb[1], prr_bb[2], down_bb["ymin"], prr_bb[4])
 
-prr_plot    <- terra::crop(prr_display, data_ext)
-water_plot  <- terra::crop(water_overlay, data_ext)
+prr_plot <- terra::crop(prr_display, data_ext)
+water_plot <- terra::crop(water_overlay, data_ext)
 
 display_mask <- terra::ifel(!is.na(prr_plot) | !is.na(water_plot), 1L, NA_integer_)
 display_mask <- drop_small_patches(display_mask, min_px = 100L)
 display_mask <- terra::sieve(display_mask, threshold = 25L, directions = 8)
-prr_plot   <- terra::mask(prr_plot, display_mask)
+prr_plot <- terra::mask(prr_plot, display_mask)
 water_plot <- terra::mask(water_plot, display_mask)
 
 # Sub-basin outlines only on the final coloured footprint.
@@ -148,11 +148,11 @@ if (file.exists(pop_csv_path)) {
     sf::st_drop_geometry() |>
     dplyr::group_by(ri_interval) |>
     dplyr::summarise(
-      n_subbasins     = dplyr::n(),
-      sum_natural_km2 = sum(natural_km2,      na.rm = TRUE),
-      sum_prr_total   = sum(prr_total_mm_km2, na.rm = TRUE),
-      sum_tda_built   = sum(tda_built,        na.rm = TRUE),
-      sum_tda_crops   = sum(tda_crops,        na.rm = TRUE),
+      n_subbasins = dplyr::n(),
+      sum_natural_km2 = sum(natural_km2, na.rm = TRUE),
+      sum_prr_total = sum(prr_total_mm_km2, na.rm = TRUE),
+      sum_tda_built = sum(tda_built, na.rm = TRUE),
+      sum_tda_crops = sum(tda_crops, na.rm = TRUE),
       .groups = "drop"
     ) |>
     dplyr::left_join(pop_tbl, by = "ri_interval") |>
@@ -173,7 +173,7 @@ if (file.exists(pop_csv_path)) {
                         names_to = "type", values_to = "people") |>
     dplyr::mutate(
       type = dplyr::recode(type,
-        direct_pop   = "Direct (in floodplain)",
+        direct_pop = "Direct (in floodplain)",
         indirect_pop = "Indirect (in pop centre)"
       ),
       type = factor(type, levels = c("Indirect (in pop centre)",
@@ -183,15 +183,15 @@ if (file.exists(pop_csv_path)) {
   p_pop <- ggplot(pop_long, aes(ri_interval, people, fill = type)) +
     geom_col(width = 0.7) +
     scale_fill_manual(values = c("Indirect (in pop centre)" = "#d9d9d9",
-                                 "Direct (in floodplain)"   = "#e6550d")) +
+                                 "Direct (in floodplain)" = "#e6550d")) +
     scale_y_continuous(labels = scales::label_comma()) +
     labs(title = glue::glue(
            "Downstream benefiting population by RI interval \u2014 {scen}"),
          x = "RI (%)", y = "People", fill = NULL) +
     theme_minimal(base_size = 12) +
     theme(
-      axis.text.x        = element_text(angle = 45, hjust = 1),
-      legend.position    = "top",
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      legend.position = "top",
       panel.grid.major.x = element_blank()
     )
 
@@ -215,7 +215,7 @@ if (file.exists(pop_csv_path)) {
          x = "RI (%)", y = "People") +
     theme_minimal(base_size = 12) +
     theme(
-      axis.text.x        = element_text(angle = 45, hjust = 1),
+      axis.text.x = element_text(angle = 45, hjust = 1),
       panel.grid.major.x = element_blank()
     )
 
