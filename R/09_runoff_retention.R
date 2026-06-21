@@ -1,19 +1,21 @@
 # ==============================================================================
-# 09_runoff_retention.R — SCS-CN runoff and "potential runoff retention"
+# 09_runoff_retention.R — SCS-CN runoff and potential runoff retention
 # ------------------------------------------------------------------------------
-# Additional scenarios can be added as a raster in data/processed/precip/
+# Runs the SCS Curve Number equation for each precipitation scenario produced by
+# 06_precipitation.R
 #
-#   S = (1000 / CN) − 10 (potential retention, in)
-#   Q = (P − 0.2 S)^2 / (P + 0.8 S) if P > 0.2 S (runoff, in)
-#     = 0 otherwise
+# For each scenario:
+#   S = (1000 / CN) − 10                     potential retention (in)
+#   Q = (P − 0.2S)^2 / (P + 0.8S)            runoff (in), if P > 0.2S
+#     = 0                                    otherwise
 #
-#   Q_baseline = SCS-CN(P, CN_baseline_slopeadj)
-#   Q_counterfactual = SCS-CN(P, CN_counterfactual_slopeadj) (natural → barren)
-#   PRR (in) = Q_counterfactual − Q_baseline
-#   PRR (mm) = PRR (in) × 25.4
+#   Q_baseline       = SCS-CN(P, baseline CN)
+#   Q_counterfactual = SCS-CN(P, counterfactual CN)
+#   PRR (in)         = Q_counterfactual − Q_baseline
+#   PRR (mm)         = PRR (in) × 25.4
 #
-# P is supplied in mm by 06_precipitation.R and converted to inches before
-# applying the SCS equation, then PRR is converted back to mm; downstream rasters are in metric.
+# Precipitation is supplied in millimetres, converted to inches for the SCS
+# equation, then converted back to millimetres for all output rasters.
 #
 # Inputs (data/processed/):
 #   precip/06_p_<scenario>.tif
@@ -35,11 +37,10 @@ scs_q_in <- function(P_in, CN) {
   terra::ifel(P_in > 0.2 * S, (P_in - 0.2 * S)^2 / (P_in + 0.8 * S), 0)
 }
 
-# CN rasters by antecedent-moisture condition. AMC II (average) is the published
-# default, run for every precipitation scenario. AMC I (dry) / III (wet) are
-# additionally run for the atmospheric-river event(s) listed in FLOOD_AMC_
-# SCENARIOS (default "ar2021"), since Nov 2021 fell on saturated (~AMC III)
-# ground — output goes to runoff/<scenario>_amc{I,III}/.
+# CN rasters for each antecedent moisture condition
+# AMC II is the default for all scenarios
+# AMC I and III are available for atmospheric-river sensitivity analysis
+
 read_cn <- function(suffix = "") list(
   b = terra::rast(file.path(paths()$processed,
                             paste0("08_cn_baseline_slopeadj", suffix, ".tif"))),
@@ -60,7 +61,7 @@ if (length(scenarios) == 0) {
   stop("no precipitation scenarios in ", precip_dir, " — run 06_precipitation.R")
 }
 
-# Run SCS-CN for one (precipitation, CN-set) pair and write the runoff outputs.
+# run one precipitation scenario with one CN set
 run_runoff <- function(P_mm, cn, out, label) {
   dir.create(out, showWarnings = FALSE, recursive = TRUE)
   P_in <- P_mm / 25.4
@@ -80,7 +81,7 @@ run_runoff <- function(P_mm, cn, out, label) {
   safe_writeRaster(pct_inc, file.path(out, "09_runoff_pct_increase.tif"))
 
   # ---- QA preview ------------------------------------------------------------
-  # "what runs off today vs. what natural ecosystems hold back" comparison
+  # compare baseline runoff with potential runoff retention
   blues <- grDevices::hcl.colors(50, palette = "Blues 3", rev = TRUE)
   greens <- grDevices::hcl.colors(50, palette = "Greens 3", rev = TRUE)
 
@@ -102,14 +103,18 @@ for (p_tif in scenarios) {
   run_runoff(P_mm, cn_amcII, file.path(runoff_dir, scen), scen)
   n_runs <- n_runs + 1L
 
-  if (scen %in% amc_scn) {
-    for (nm in names(amc_extra)) {
-      run_runoff(P_mm, read_cn(amc_extra[[nm]]),
-                 file.path(runoff_dir, paste0(scen, "_", nm)),
-                 paste0(scen, " (", nm, ")"))
-      n_runs <- n_runs + 1L
-    }
-  }
+  # AMC I and III outputs are disabled to save disk
+  # 17_ar_sensitivity.R computes these directly in memory from the CN rasters
+  # uncomment below to restore runoff/<scenario>_amcI and _amcIII outputs
+  
+  # if (scen %in% amc_scn) {
+  #   for (nm in names(amc_extra)) {
+  #     run_runoff(P_mm, read_cn(amc_extra[[nm]]),
+  #                file.path(runoff_dir, paste0(scen, "_", nm)),
+  #                paste0(scen, " (", nm, ")"))
+  #     n_runs <- n_runs + 1L
+  #   }
+  # }
 }
 
 message("✓ 09_runoff_retention.R — completed ", n_runs, " runoff run(s)")
