@@ -14,11 +14,19 @@
 #   04_hsg.tif, 05_slope_deg.tif
 #   lookup/cn_lookup.csv
 #
+# Antecedent moisture: published CN values are AMC II (average wetness). The
+# slope-adjusted CN(II) is also converted to AMC I (dry) and AMC III (wet), so a
+# storm can be run on dry, average, or saturated ground. AMC III is the realistic
+# state for the Nov 2021 atmospheric river, which fell on soils already saturated
+# by an earlier storm.
+#
 # Outputs (data/processed/):
 #   08_cn_baseline.tif
 #   08_cn_counterfactual.tif
-#   08_cn_baseline_slopeadj.tif
-#   08_cn_counterfactual_slopeadj.tif
+#   08_cn_baseline_slopeadj.tif                  (AMC II, default)
+#   08_cn_counterfactual_slopeadj.tif            (AMC II, default)
+#   08_cn_baseline_slopeadj_amc{I,III}.tif
+#   08_cn_counterfactual_slopeadj_amc{I,III}.tif
 # ==============================================================================
 
 source(here::here("R", "00_setup.R"))
@@ -77,6 +85,22 @@ cn_cf_adj <- terra::ifel(cn_cf_adj > 100, 100, cn_cf_adj)
 safe_writeRaster(cn_baseline_adj, file.path(paths()$processed, "08_cn_baseline_slopeadj.tif"))
 safe_writeRaster(cn_cf_adj, file.path(paths()$processed, "08_cn_counterfactual_slopeadj.tif"))
 
+# ---- Antecedent moisture condition (AMC) variants ----------------------------
+# Convert the slope-adjusted CN(II) to dry (AMC I) and wet (AMC III) conditions.
+# Standard USDA NRCS conversions (Chow, Maidment & Mays 1988; Mishra & Singh
+# 2003): AMC III raises CN (less storage, more runoff), AMC I lowers it.
+cn_amcI   <- function(cn) terra::clamp(4.2 * cn / (10 - 0.058 * cn), 1, 100)
+cn_amcIII <- function(cn) terra::clamp(23  * cn / (10 + 0.13  * cn), 1, 100)
+
+amc_fns <- list(amcI = cn_amcI, amcIII = cn_amcIII)
+for (nm in names(amc_fns)) {
+  f <- amc_fns[[nm]]
+  safe_writeRaster(f(cn_baseline_adj),
+    file.path(paths()$processed, paste0("08_cn_baseline_slopeadj_", nm, ".tif")))
+  safe_writeRaster(f(cn_cf_adj),
+    file.path(paths()$processed, paste0("08_cn_counterfactual_slopeadj_", nm, ".tif")))
+}
+
 # ---- QA preview --------------------------------------------------------------
 # 3 panel baseline vs barren counterfactual vs difference
 qa_png("08_cn_slopeadj.png", ncol = 3, function() {
@@ -93,4 +117,18 @@ qa_png("08_cn_slopeadj.png", ncol = 3, function() {
               col = pal_diff)
 })
 
-message("✓ 08_curve_numbers.R — wrote 4 CN rasters (baseline, counterfactual, ±slope)")
+# Baseline CN under the three antecedent-moisture conditions (dry → wet).
+qa_png("08_cn_amc.png", ncol = 3, function() {
+  op <- graphics::par(mfrow = c(1, 3), mar = c(2, 2, 3, 6))
+  on.exit(graphics::par(op), add = TRUE)
+  pal <- grDevices::hcl.colors(50, palette = "YlOrBr", rev = FALSE)
+  terra::plot(cn_amcI(cn_baseline_adj),   main = "CN baseline — AMC I (dry)",
+              col = pal, range = c(20, 100))
+  terra::plot(cn_baseline_adj,            main = "CN baseline — AMC II (average)",
+              col = pal, range = c(20, 100))
+  terra::plot(cn_amcIII(cn_baseline_adj), main = "CN baseline — AMC III (wet)",
+              col = pal, range = c(20, 100))
+})
+
+message("✓ 08_curve_numbers.R — wrote 8 CN rasters (baseline/counterfactual, ",
+        "±slope, AMC I/II/III)")

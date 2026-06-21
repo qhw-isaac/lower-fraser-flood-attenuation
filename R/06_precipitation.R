@@ -7,14 +7,16 @@
 # 12_realized_benefit.R ranks each, and 14_interactive_map.R ships whichever
 # FLOOD_SCENARIO selects.
 #
-# SCENARIO TYPES
-#   1. Derived recipes (`recipes` below)
-#   2. Drop-in grids (`precip/inputs/<name>.tif`, depth in mm)
+# SCENARIO FAMILIES (each = a baseline event depth in mm + climate-uplift variants)
+#   1. Climatological wettest month (PRISM):  wettest_month[ _plus10 | _plus20 ]
+#   2. Nov 2021 atmospheric river (RDPA):      ar2021[ _plus10 | _plus20 ]
+#   + any drop-in grids (`precip/inputs/<name>.tif`, depth in mm)
 #
 # Restrict which scenarios build with FLOOD_PRECIP_SCENARIOS="a,b" (default all).
 #
 # Inputs:
-#   data_path("prism_pcic") PCIC PRISM 800 m monthly normals (12 bands)
+#   data_path("prism_pcic")  PCIC PRISM 800 m monthly normals (12 bands)
+#   data_path("rdpa_ar2021") RDPA Nov 13-16 2021 atmospheric-river storm total
 #   data/processed/03_lulc_values.tif
 #   data/processed/precip/inputs/*.tif
 #
@@ -33,16 +35,40 @@ prism <- terra::rast(data_path("prism_pcic")) |>
 lulc <- terra::rast(file.path(paths()$processed, "03_lulc_values.tif"))
 
 # ---- Scenario registry -------------------------------------------------------
-# name -> function() returning a precipitation raster P (mm) on the working grid
+# name -> function() returning a precipitation depth raster P (mm) on the working
+# grid. Two families, each a baseline event depth plus climate-uplift variants.
+# The +10 % / +20 % factors approximate Clausius-Clapeyron intensification
+# (~7 %/degC), bracketing roughly +1.5 degC and +3 degC of warming.
+
+# Family 1 - Climatological wettest month (PCIC PRISM monthly normals, pixel-wise
+#   max month). Headline run; parity with Duarte. Default FLOOD_SCENARIO.
 prism_max <- function() terra::app(prism, fun = max, na.rm = TRUE)
 
+# Family 2 - Atmospheric river historical event (RDPA Nov 13-16 2021 storm
+#   total; the Sumas Prairie validation event). Pad one cell and neighbour-fill
+#   before reprojecting as a guard in case the tile stops short of the AOI's
+#   north edge; harmless once the tile already covers the full AOI.
+ar2021_storm <- function() {
+  r <- terra::rast(data_path("rdpa_ar2021", must_exist = TRUE))
+  r <- terra::focal(terra::extend(r, 1), w = 3, fun = mean,
+                    na.policy = "only", na.rm = TRUE)
+  align_to_grid(r, method = "bilinear")
+}
+
+uplift <- function(base, factor) function() base() * factor
+
 recipes <- list(
-  wettest_month = prism_max, 
-  wettest_month_plus10 = function() prism_max() * 1.10,
-  wettest_month_plus20 = function() prism_max() * 1.20
+  # Family 1 - climatological wettest month
+  wettest_month        = prism_max,
+  wettest_month_plus10 = uplift(prism_max, 1.10),
+  wettest_month_plus20 = uplift(prism_max, 1.20),
+  # Family 2 - November 2021 atmospheric river
+  ar2021               = ar2021_storm,
+  ar2021_plus10        = uplift(ar2021_storm, 1.10),
+  ar2021_plus20        = uplift(ar2021_storm, 1.20)
 )
 
-# register any external drop-in grids (depth in mm) as scenarios
+# register any external drop-in grids (depth in mm) as additional scenarios
 for (f in list.files(inputs_dir, pattern = "\\.tif$", full.names = TRUE)) {
   nm <- tools::file_path_sans_ext(basename(f))
   local({ ff <- f

@@ -35,8 +35,21 @@ scs_q_in <- function(P_in, CN) {
   terra::ifel(P_in > 0.2 * S, (P_in - 0.2 * S)^2 / (P_in + 0.8 * S), 0)
 }
 
-cn_b <- terra::rast(file.path(paths()$processed, "08_cn_baseline_slopeadj.tif"))
-cn_c <- terra::rast(file.path(paths()$processed, "08_cn_counterfactual_slopeadj.tif"))
+# CN rasters by antecedent-moisture condition. AMC II (average) is the published
+# default, run for every precipitation scenario. AMC I (dry) / III (wet) are
+# additionally run for the atmospheric-river event(s) listed in FLOOD_AMC_
+# SCENARIOS (default "ar2021"), since Nov 2021 fell on saturated (~AMC III)
+# ground — output goes to runoff/<scenario>_amc{I,III}/.
+read_cn <- function(suffix = "") list(
+  b = terra::rast(file.path(paths()$processed,
+                            paste0("08_cn_baseline_slopeadj", suffix, ".tif"))),
+  c = terra::rast(file.path(paths()$processed,
+                            paste0("08_cn_counterfactual_slopeadj", suffix, ".tif"))))
+
+cn_amcII <- read_cn("")               # default condition for all scenarios
+amc_extra <- c(amcI = "_amcI", amcIII = "_amcIII")
+amc_scn <- trimws(strsplit(Sys.getenv("FLOOD_AMC_SCENARIOS", "ar2021"),
+                           ",", fixed = TRUE)[[1]])
 
 precip_dir <- file.path(paths()$processed, "precip")
 runoff_dir <- file.path(paths()$processed, "runoff")
@@ -47,16 +60,12 @@ if (length(scenarios) == 0) {
   stop("no precipitation scenarios in ", precip_dir, " — run 06_precipitation.R")
 }
 
-for (p_tif in scenarios) {
-  scen <- sub("^06_p_", "", tools::file_path_sans_ext(basename(p_tif)))
-  out <- file.path(runoff_dir, scen)
+# Run SCS-CN for one (precipitation, CN-set) pair and write the runoff outputs.
+run_runoff <- function(P_mm, cn, out, label) {
   dir.create(out, showWarnings = FALSE, recursive = TRUE)
-
-  P_mm <- terra::rast(p_tif)
   P_in <- P_mm / 25.4
-
-  q_b <- scs_q_in(P_in, cn_b)
-  q_c <- scs_q_in(P_in, cn_c)
+  q_b <- scs_q_in(P_in, cn$b)
+  q_c <- scs_q_in(P_in, cn$c)
 
   prr <- (q_c - q_b) * 25.4 # back to mm
   q_b_mm <- q_b * 25.4
@@ -74,15 +83,33 @@ for (p_tif in scenarios) {
   # "what runs off today vs. what natural ecosystems hold back" comparison
   blues <- grDevices::hcl.colors(50, palette = "Blues 3", rev = TRUE)
   greens <- grDevices::hcl.colors(50, palette = "Greens 3", rev = TRUE)
-  
-  qa_png(paste0("09_runoff_", scen, ".png"), ncol = 2, function() {
+
+  qa_png(paste0("09_runoff_", basename(out), ".png"), ncol = 2, function() {
     op <- graphics::par(mfrow = c(1, 2), mar = c(2, 2, 3, 6))
     on.exit(graphics::par(op), add = TRUE)
-    terra::plot(q_b_mm, main = paste0("Q baseline (mm) — ", scen), col = blues)
-    terra::plot(prr, main = paste0("PRR (mm) — ", scen), col = greens)
+    terra::plot(q_b_mm, main = paste0("Q baseline (mm) — ", label), col = blues)
+    terra::plot(prr, main = paste0("PRR (mm) — ", label), col = greens)
   })
 
-  message("  ✓ runoff scenario '", scen, "' written to ", basename(out))
+  message("  ✓ runoff '", basename(out), "' written")
 }
 
-message("✓ 09_runoff_retention.R — completed ", length(scenarios), " scenario(s)")
+n_runs <- 0L
+for (p_tif in scenarios) {
+  scen <- sub("^06_p_", "", tools::file_path_sans_ext(basename(p_tif)))
+  P_mm <- terra::rast(p_tif)
+
+  run_runoff(P_mm, cn_amcII, file.path(runoff_dir, scen), scen)
+  n_runs <- n_runs + 1L
+
+  if (scen %in% amc_scn) {
+    for (nm in names(amc_extra)) {
+      run_runoff(P_mm, read_cn(amc_extra[[nm]]),
+                 file.path(runoff_dir, paste0(scen, "_", nm)),
+                 paste0(scen, " (", nm, ")"))
+      n_runs <- n_runs + 1L
+    }
+  }
+}
+
+message("✓ 09_runoff_retention.R — completed ", n_runs, " runoff run(s)")
