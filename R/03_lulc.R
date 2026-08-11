@@ -113,9 +113,13 @@ qa_png("03_lulc_classes.png", panel_w = 1400, function() {
             "brown", "yellow3", "grey60", "red", "steelblue",
             "white", "darkorange")
   terra::coltab(lulc_plot) <- data.frame(value = ids, col = cols)
+  # trim the climate prefix NALCMS repeats on most class names, which otherwise
+  # pushes the longest labels off the edge of the panel
+  labs <- sub("^(Temperate or sub-polar|Sub-polar or polar|Sub-polar) ", "",
+              nalcms_codes$nalcms_name)
+  substr(labs, 1, 1) <- toupper(substr(labs, 1, 1))
   lulc_plot <- terra::categories(lulc_plot, value = data.frame(
-    id = ids,
-    label = c("No data", nalcms_codes$nalcms_name, "Cropland (AAFC)")))
+    id = ids, label = c("No data", labs, "Cropland (AAFC)")))
 
   terra::plot(lulc_plot, type = "classes", axes = TRUE, main = "")
   terra::plot(water_qa, add = TRUE, legend = FALSE, col = "#74add1")
