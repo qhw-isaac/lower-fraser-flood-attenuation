@@ -1,5 +1,5 @@
 # ==============================================================================
-# 09_runoff_retention.R — SCS-CN runoff and potential runoff retention
+# 09_runoff_retention.R: SCS-CN runoff and potential runoff retention
 # ------------------------------------------------------------------------------
 # Runs the SCS Curve Number equation for each precipitation scenario produced by
 # 06_precipitation.R
@@ -24,97 +24,65 @@
 #
 # Outputs (data/processed/runoff/<scenario>/):
 #   09_q_baseline_mm.tif
-#   09_q_counterfactual_mm.tif
 #   09_prr_mm.tif
-#   09_runoff_pct_increase.tif
 # ==============================================================================
 
 source(here::here("R", "00_setup.R"))
 
 scs_q_in <- function(P_in, CN) {
   S <- terra::ifel(CN > 0, 1000 / CN - 10, NA)
-  S <- terra::ifel(S < 0, 0, S)
+  # clamp negative S (CN just over 100 after the slope adjustment) to 0 while
+  # keeping NA where CN is unmapped, so pixels with no curve number (snow/ice,
+  # and cranberry, which cn_lookup treats as managed water) drop out of the
+  # runoff surface instead of being modelled
+  S <- terra::clamp(S, lower = 0)
   terra::ifel(P_in > 0.2 * S, (P_in - 0.2 * S)^2 / (P_in + 0.8 * S), 0)
 }
 
-# CN rasters for each antecedent moisture condition
-# AMC II is the default for all scenarios
-# AMC I and III are available for atmospheric-river sensitivity analysis
-
-read_cn <- function(suffix = "") list(
-  b = terra::rast(file.path(paths()$processed,
-                            paste0("08_cn_baseline_slopeadj", suffix, ".tif"))),
+# slope-adjusted AMC II curve numbers from 08: one pair, used by every scenario
+cn <- list(
+  b = terra::rast(file.path(paths()$processed, "08_cn_baseline_slopeadj.tif")),
   c = terra::rast(file.path(paths()$processed,
-                            paste0("08_cn_counterfactual_slopeadj", suffix, ".tif"))))
-
-cn_amcII <- read_cn("")               # default condition for all scenarios
-amc_extra <- c(amcI = "_amcI", amcIII = "_amcIII")
-amc_scn <- trimws(strsplit(Sys.getenv("FLOOD_AMC_SCENARIOS", "ar2021"),
-                           ",", fixed = TRUE)[[1]])
+                            "08_cn_counterfactual_slopeadj.tif")))
 
 precip_dir <- file.path(paths()$processed, "precip")
 runoff_dir <- file.path(paths()$processed, "runoff")
 dir.create(runoff_dir, showWarnings = FALSE, recursive = TRUE)
 
 scenarios <- list.files(precip_dir, pattern = "^06_p_.*\\.tif$", full.names = TRUE)
-if (length(scenarios) == 0) {
-  stop("no precipitation scenarios in ", precip_dir, " — run 06_precipitation.R")
-}
 
-# run one precipitation scenario with one CN set
-run_runoff <- function(P_mm, cn, out, label) {
+blues <- grDevices::hcl.colors(50, palette = "Blues 3", rev = TRUE)
+greens <- grDevices::hcl.colors(50, palette = "Greens 3", rev = TRUE)
+
+# run one scenario: baseline runoff, counterfactual runoff, and retention
+run_runoff <- function(P_mm, out, label) {
   dir.create(out, showWarnings = FALSE, recursive = TRUE)
   P_in <- P_mm / 25.4
   q_b <- scs_q_in(P_in, cn$b)
   q_c <- scs_q_in(P_in, cn$c)
 
-  prr <- (q_c - q_b) * 25.4 # back to mm
   q_b_mm <- q_b * 25.4
-  q_c_mm <- q_c * 25.4
-
-  pct_inc <- terra::ifel(q_b_mm > 0, 100 * (q_c_mm - q_b_mm) / q_b_mm, NA)
-  pct_inc <- terra::ifel(pct_inc > 1000, 1000, pct_inc) # cap for plotting
+  prr <- (q_c - q_b) * 25.4 # back to mm
 
   safe_writeRaster(q_b_mm, file.path(out, "09_q_baseline_mm.tif"))
-  safe_writeRaster(q_c_mm, file.path(out, "09_q_counterfactual_mm.tif"))
   safe_writeRaster(prr, file.path(out, "09_prr_mm.tif"))
-  safe_writeRaster(pct_inc, file.path(out, "09_runoff_pct_increase.tif"))
 
   # ---- QA preview ------------------------------------------------------------
-  # compare baseline runoff with potential runoff retention
-  blues <- grDevices::hcl.colors(50, palette = "Blues 3", rev = TRUE)
-  greens <- grDevices::hcl.colors(50, palette = "Greens 3", rev = TRUE)
-
+  # how much runoff this storm produces, against how much natural cover holds back
   qa_png(paste0("09_runoff_", basename(out), ".png"), ncol = 2, function() {
-    op <- graphics::par(mfrow = c(1, 2), mar = c(2, 2, 3, 6))
+    op <- graphics::par(mfrow = c(1, 2))
     on.exit(graphics::par(op), add = TRUE)
-    terra::plot(q_b_mm, main = paste0("Q baseline (mm) — ", label), col = blues)
-    terra::plot(prr, main = paste0("PRR (mm) — ", label), col = greens)
+    terra::plot(q_b_mm, col = blues, axes = TRUE, main = "")
+    terra::plot(prr, col = greens, axes = TRUE, main = "")
   })
 
   message("  ✓ runoff '", basename(out), "' written")
 }
 
-n_runs <- 0L
 for (p_tif in scenarios) {
   scen <- sub("^06_p_", "", tools::file_path_sans_ext(basename(p_tif)))
-  P_mm <- terra::rast(p_tif)
-
-  run_runoff(P_mm, cn_amcII, file.path(runoff_dir, scen), scen)
-  n_runs <- n_runs + 1L
-
-  # AMC I and III outputs are disabled to save disk
-  # 17_ar_sensitivity.R computes these directly in memory from the CN rasters
-  # uncomment below to restore runoff/<scenario>_amcI and _amcIII outputs
-  
-  # if (scen %in% amc_scn) {
-  #   for (nm in names(amc_extra)) {
-  #     run_runoff(P_mm, read_cn(amc_extra[[nm]]),
-  #                file.path(runoff_dir, paste0(scen, "_", nm)),
-  #                paste0(scen, " (", nm, ")"))
-  #     n_runs <- n_runs + 1L
-  #   }
-  # }
+  run_runoff(terra::rast(p_tif), file.path(runoff_dir, scen), scen)
 }
 
-message("✓ 09_runoff_retention.R — completed ", n_runs, " runoff run(s)")
+message("✓ 09_runoff_retention.R: completed ", length(scenarios),
+        " runoff run(s)")
