@@ -24,6 +24,9 @@ suppressPackageStartupMessages({
 
   # network / topology
   library(igraph)         # routing graph over subbasins
+  
+  # interactive map
+  library(jsonlite)
 })
 
 # ---- terra scratch space -----------------------------------------------------
