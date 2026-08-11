@@ -1,17 +1,14 @@
 # ==============================================================================
-# 04_soils_hysog.R — Hydrologic Soil Group (HSG) raster, HYSOGs250m ONLY
+# 04_soils_hysog.R: Hydrologic Soil Group (HSG) raster
 # ------------------------------------------------------------------------------
-# This script uses HYSOGs250m as the sole soil source so the soil layer is
-# globally consistent. It writes the same outputs read by 08_curve_numbers.R:
+# HYSOGs250m provides the soil type used in the Curve Number calculation. 
+# Outputs read by 08_curve_numbers.R:
 #
-#   04_hsg.tif — integer HSG raster, 1=A, 2=B, 3=C, 4=D
-#   04_hsg_source.tif — source raster, 3=HYSOGs250m, 4=D-fill
+#   04_hsg.tif          integer HSG, 1=A, 2=B, 3=C, 4=D
+#   04_hsg_source.tif
 #
-# HYSOGs250m encoding:
-#   1,2,3,4 = HSG A, B, C, D
-#   11,12,13,14 = dual groups A/D, B/D, C/D, D/D
-#
-# Dual groups are collapsed to D here.
+# HYSOGs250m codes 1-4 as HSG A-D and 11-14 as the dual groups A/D, B/D, C/D,
+# D/D. Dual groups are collapsed to D following Duarte et al. (2024).
 # ==============================================================================
 
 source(here::here("R", "00_setup.R"))
@@ -22,24 +19,20 @@ lulc <- terra::rast(file.path(paths()$processed, "03_lulc_values.tif"))
 
 hy <- terra::rast(data_path("hysogs250m"))
 
-# ---- Align HYSOGs250m to the exact LULC grid ---------------------------------
-hy <- hy |> 
+# align_to_grid() projects onto 03's lulc raster itself, so geometry matches
+hy <- hy |>
   align_to_grid(method = "near")
 
-# force an exact geometry match (otherwise terra::ifel() errors on origin/extent)
-hy <- terra::resample(hy, lulc, method = "near")
-
-# ---- Reclass: dual groups (11-14) -> D; keep only A-D, else NA ----------------
+# dual groups (11-14) -> D, keep only A-D, drop water/no-data
 hy <- terra::ifel(hy %in% c(11, 12, 13, 14), 4L, hy)
-hy <- terra::ifel(hy %in% 1:4, hy, NA) # drop water/no-data so it can't leak into CN
+hy <- terra::ifel(hy %in% 1:4, hy, NA)
 
-# ---- D-fill where LULC exists but HYSOG has no soil (matches 04_soils.R) ------
+# D-fill (D = the least infiltrative group / highest runoff) where land cover 
+# exists but HYSOG has no soil to avoid silent drops during CN lookup
 hsg <- terra::ifel(is.na(hy), 4L, hy)
 hsg <- terra::mask(hsg, lulc)
 
-# Source raster:
-# 3 = HYSOGs250m where HYSOG had valid soil
-# 4 = D-fill where LULC exists but HYSOG was NA
+# source: 3 = real HYSOG soil, 4 = D-fill
 hsg_src <- terra::ifel(
   !is.na(hy),
   3L,
@@ -76,44 +69,16 @@ for (i in seq_len(nrow(src_freq))) {
 }
 
 # ---- QA preview --------------------------------------------------------------
+# the soil groups across the study area and how much of the map is D-fill
 qa_png("04_hsg_hysog.png", ncol = 2, function() {
-  op <- graphics::par(
-    mfrow = c(1, 2),
-    mar = c(2, 2, 3, 2),
-    oma = c(0, 0, 0, 10)
-  )
-  
+  op <- graphics::par(mfrow = c(1, 2))
   on.exit(graphics::par(op), add = TRUE)
-  
-  terra::plot(
-    hsg,
-    main = "Hydrologic Soil Group\n(HYSOGs250m only)",
-    type = "classes",
-    levels = c(
-      "A (sand)",
-      "B (loam)",
-      "C (clay loam)",
-      "D (clay)"
-    ),
-    col = c("#fee08b", "#fdae61", "#d73027", "#7f0000"),
-    background = "lightgrey"
-  )
-  
-  hsg_src_labeled <- terra::categories(
-    hsg_src,
-    value = data.frame(
-      id = c(3L, 4L),
-      label = c("HYSOGs250m", "D-fill")
-    )
-  )
-  
-  terra::plot(
-    hsg_src_labeled,
-    main = "HSG source",
-    type = "classes",
-    col = c("#d95f02", "#7570b3"),
-    background = "lightgrey"
-  )
+  terra::plot(hsg, type = "classes",
+              levels = c("A (sand)", "B (loam)", "C (clay loam)", "D (clay)"),
+              col = c("#fee08b", "#fdae61", "#d73027", "#7f0000"),
+              axes = TRUE, main = "")
+  terra::plot(hsg_src, type = "classes", levels = c("HYSOGs250m", "D-fill"),
+              col = c("#d95f02", "#7570b3"), axes = TRUE, main = "")
 })
 
-message("✓ 04_soils_hysog.R — wrote HSG raster using HYSOGs250m.")
+message("✓ 04_soils_hysog.R: wrote HSG raster using HYSOGs250m.")
