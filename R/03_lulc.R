@@ -1,5 +1,5 @@
 # ==============================================================================
-# 03_lulc.R — land use / land cover raster + natural-vegetation mask
+# 03_lulc.R: land use / land cover raster + natural-vegetation mask
 # ------------------------------------------------------------------------------
 # Steps:
 #   1. Load NALCMS 2020, align to the working grid
@@ -20,15 +20,19 @@
 source(here::here("R", "00_setup.R"))
 
 # ---- 1. NALCMS base ----------------------------------------------------------
+# this script defines the shared grid, so it builds the template from the AOI
+# explicitly; every later script aligns to the raster written here
+tmpl <- grid_template()
+
 nalcms <- terra::rast(data_path("nalcms_2020")) |>
-  align_to_grid(method = "near")
+  align_to_grid(method = "near", template = tmpl)
 
 # ---- 2. Stamp AAFC crop classes on top ---------------------------------------
 aafc_codes <- readr::read_csv(here::here("lookup", "aafc_classes.csv"),
                               show_col_types = FALSE)
 
 aafc <- terra::rast(data_path("aafc_aci")) |>
-  align_to_grid(method = "near")
+  align_to_grid(method = "near", template = tmpl)
 
 crop_codes <- aafc_codes$aafc_code[aafc_codes$is_crop]
 
@@ -42,23 +46,29 @@ source_coverage <- terra::ifel(!is.na(lulc), 1L, NA_integer_)
 safe_writeRaster(source_coverage,
                  file.path(paths()$processed, "03_lulc_source_coverage.tif"))
 
-# warn if NALCMS/AAFC clips don't cover the full upstream AOI; downstream
-# sub-basins outside the source footprint will model as NA
+# warn if the NALCMS/AAFC clips is smaller than the upstream AOI clip
 src_px <- terra::global(!is.na(source_coverage), "sum", na.rm = TRUE)[1, 1]
 aoi_px <- terra::global(!is.na(aoi_mask), "sum", na.rm = TRUE)[1, 1]
 gap <- 1 - src_px / aoi_px
+if (is.finite(gap) && gap > 0.001) {
+  warning(sprintf(paste0(
+    "LULC sources cover only %.1f%% of the upstream AOI (%.1f%% gap); ",
+    "sub-basins outside the NALCMS/AAFC footprint will model as NA. ",
+    "check the raw clips against the expanded AOI"),
+    100 * (1 - gap), 100 * gap), immediate. = TRUE)
+}
 
-# drop water (18) and no-data (0); AAFC built-up (34) / barren (30) stay
+# drop water (18) and no-data (0); # 1 = NALCMS, 2 = AAFC
 lulc <- terra::mask(lulc, lulc %in% c(0L, 18L), maskvalue = TRUE)
-lulc_src <- terra::ifel(aafc %in% crop_codes, 2L, 1L) # 1 = NALCMS, 2 = AAFC
+lulc_src <- terra::mask(terra::ifel(aafc %in% crop_codes, 2L, 1L), lulc)
 
 safe_writeRaster(lulc, file.path(paths()$processed, "03_lulc_values.tif"))
 
 # ---- 3. Natural-vegetation mask ----------------------------------------------
+# 1 = natural NALCMS class, 0 = otherwise
 nalcms_codes <- readr::read_csv(here::here("lookup", "nalcms_classes.csv"),
                                 show_col_types = FALSE)
 
-# binary natural-vegetation mask: 1 = natural NALCMS class, 0 = not
 nat_codes <- nalcms_codes$nalcms_code[nalcms_codes$is_natural]
 nat_mask <- terra::ifel(lulc %in% nat_codes, 1, 0)
 
@@ -81,39 +91,19 @@ readr::write_csv(legend, file.path(paths()$processed, "03_lulc_class_legend.csv"
 # NALCMS water (class 18) for river/lake overlay on the classes map
 water_qa <- terra::ifel(!is.na(aoi_mask) & nalcms == 18L, 1L, NA_integer_)
 
-# File 1: LULC source + natural-vegetation mask
-qa_png("03_lulc_sources.png", ncol = 2, panel_h = 1150, function() {
-  op <- graphics::par(mfrow = c(1, 2), oma = c(1, 0, 1, 6))
+# does the AAFC crop override land where expected, and does the natural mask
+# pick out the vegetated classes
+qa_png("03_lulc_sources.png", ncol = 2, function() {
+  op <- graphics::par(mfrow = c(1, 2))
   on.exit(graphics::par(op), add = TRUE)
-
-  terra::plot(lulc_src,
-              main = "LULC source\n(NALCMS vs AAFC ACI override)",
-              type = "classes",
-              levels = c("NALCMS", "AAFC ACI"),
-              col = c("forestgreen", "goldenrod"),
-              background = "grey90",
-              mar = c(2.5, 3, 5, 6),
-              ext = terra::ext(lulc))
-
-  terra::plot(nat_mask,
-              main = "Natural-vegetation mask\n(NALCMS is_natural)",
-              type = "classes",
-              levels = c("not natural", "natural"),
-              col = c("grey90", "forestgreen"),
-              background = "grey90",
-              mar = c(2.5, 3, 3, 6),
-              ext = terra::ext(lulc))
+  terra::plot(lulc_src, type = "classes", levels = c("NALCMS", "AAFC ACI"),
+              col = c("forestgreen", "goldenrod"), axes = TRUE, main = "")
+  terra::plot(nat_mask, type = "classes", levels = c("not natural", "natural"),
+              col = c("grey85", "forestgreen"), axes = TRUE, main = "")
 })
 
-# File 2: Full LULC classes
-qa_png("03_lulc_classes.png", ncol = 1, panel_w = 1400, function() {
-  op <- graphics::par(
-    mfrow = c(1, 1),
-    mar = c(2, 2, 3, 1),
-    oma = c(0, 0, 2, 12)
-  )
-  on.exit(graphics::par(op), add = TRUE)
-
+# every class present in the model, with mapped water drawn over it
+qa_png("03_lulc_classes.png", panel_w = 1400, function() {
   lulc_plot <- lulc
   lulc_plot[lulc_plot %in% aafc_codes$aafc_code[aafc_codes$is_crop]] <- 200L
 
@@ -122,26 +112,13 @@ qa_png("03_lulc_classes.png", ncol = 1, panel_w = 1400, function() {
             "goldenrod4", "wheat", "rosybrown", "lightgreen", "palegreen3",
             "brown", "yellow3", "grey60", "red", "steelblue",
             "white", "darkorange")
+  terra::coltab(lulc_plot) <- data.frame(value = ids, col = cols)
+  lulc_plot <- terra::categories(lulc_plot, value = data.frame(
+    id = ids,
+    label = c("No data", nalcms_codes$nalcms_name, "Cropland (AAFC)")))
 
-  coltab <- data.frame(value = ids, col = cols)
-  terra::coltab(lulc_plot) <- coltab
-
-  lulc_labeled <- terra::categories(lulc_plot,
-                                    value = data.frame(
-                                      id = ids,
-                                      label = c("No data", nalcms_codes$nalcms_name, "Cropland (AAFC)")
-                                    ))
-
-  terra::plot(lulc_labeled,
-              main = "",
-              type = "classes",
-              background = "grey90",
-              plg = list(cex = 1.15),
-              ext = terra::ext(lulc))
+  terra::plot(lulc_plot, type = "classes", axes = TRUE, main = "")
   terra::plot(water_qa, add = TRUE, legend = FALSE, col = "#74add1")
-  
-  graphics::mtext("LULC classes\n(NALCMS + AAFC ACI)",
-                  outer = TRUE, side = 3, line = -1.2, cex = 1.2, font = 2)
 })
 
-message("✓ 03_lulc.R — wrote LULC values, natural mask, and legend")
+message("✓ 03_lulc.R: wrote LULC values, natural mask, and legend")

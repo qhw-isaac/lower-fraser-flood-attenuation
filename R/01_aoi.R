@@ -1,5 +1,5 @@
 # ==============================================================================
-# 01_aoi.R — downstream AOI + regional-district reference layers
+# 01_aoi.R: downstream AOI + regional-district reference layers
 # ------------------------------------------------------------------------------
 # downstream_aoi = where downstream flood risk is evaluated (MVRD ∪ FVRD).
 #
@@ -10,21 +10,23 @@
 
 source(here::here("R", "00_setup.R"))
 
-# fetch BC regional districts and re-project to project CRS
-rds <- bcmaps::regional_districts() |>
+rds <- bcmaps::regional_districts(ask = FALSE) |>
   sf::st_transform(PROJECT_CRS)
 
 mvrd <- dplyr::filter(rds, ADMIN_AREA_NAME == "Metro Vancouver Regional District")
 fvrd <- dplyr::filter(rds, ADMIN_AREA_NAME == "Fraser Valley Regional District")
 
+# the two districts together are the downstream demand area
 lower_mainland <- sf::st_union(
   c(sf::st_geometry(mvrd), sf::st_geometry(fvrd))
 )
 
-aoi_downstream <- sf::st_sf(role = "downstream", geometry = lower_mainland, crs = PROJECT_CRS)
+aoi_downstream <- sf::st_sf(role = "downstream", geometry = lower_mainland,
+                            crs = PROJECT_CRS)
 
 p <- paths()$processed
 
+# write one polygon layer, reporting its area as a sanity check
 file_save <- function(x, name) {
   f <- file.path(p, paste0(name, ".gpkg"))
   sf::st_write(x, f, delete_dsn = TRUE, quiet = TRUE)
