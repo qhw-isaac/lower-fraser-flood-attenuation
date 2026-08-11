@@ -46,6 +46,9 @@ data/raw/**
 data/processed/**
 !data/processed/.gitkeep
 
+# terra scratch space (spilled intermediate rasters; cleared per session)
+data/tmp/
+
 # figure / table / shapefile outputs (regenerated from scripts)
 output/figures/**
 !output/figures/.gitkeep
@@ -65,12 +68,6 @@ output/shapefiles/**
 # but always keep the small JS scripts
 !gee/*.js
 
-# rendered report outputs
-report/*.html
-report/*.pdf
-technical_report/*.html
-technical_report/*.pdf
-
 # ============================================================================
 # Reference material (large PDFs the user provided locally for context)
 # ============================================================================
@@ -79,10 +76,5 @@ technical_report/
 lookup/
 
 # temp hide
-00_setup.R
-prep_hrdem_mosaic.R
 output/interactive_map/
-14_interactive_map.R
-15_commodities.R
-16_watershed_indicators.R
-17_ar_sensitivity.R
+99_interactive_map.R
