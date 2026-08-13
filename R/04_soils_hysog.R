@@ -1,14 +1,14 @@
 # ==============================================================================
 # 04_soils_hysog.R: Hydrologic Soil Group (HSG) raster
 # ------------------------------------------------------------------------------
-# HYSOGs250m provides the soil type used in the Curve Number calculation. 
+# HYSOGs250m provides the soil type used in the Curve Number calculation.
 # Outputs read by 08_curve_numbers.R:
 #
 #   04_hsg.tif          integer HSG, 1=A, 2=B, 3=C, 4=D
 #   04_hsg_source.tif
 #
 # HYSOGs250m codes 1-4 as HSG A-D and 11-14 as the dual groups A/D, B/D, C/D,
-# D/D. Dual groups are collapsed to D following Duarte et al. (2024).
+# D/D. Dual groups are collapsed to D, the higher-runoff assumption.
 # ==============================================================================
 
 source(here::here("R", "00_setup.R"))
@@ -27,8 +27,8 @@ hy <- hy |>
 hy <- terra::ifel(hy %in% c(11, 12, 13, 14), 4L, hy)
 hy <- terra::ifel(hy %in% 1:4, hy, NA)
 
-# D-fill (D = the least infiltrative group / highest runoff) where land cover 
-# exists but HYSOG has no soil to avoid silent drops during CN lookup
+# fill with D (least infiltrative, highest runoff) where land cover exists but
+# HYSOG has no soil, so the CN lookup does not drop those pixels silently
 hsg <- terra::ifel(is.na(hy), 4L, hy)
 hsg <- terra::mask(hsg, lulc)
 
@@ -59,7 +59,7 @@ message("HSG source coverage:")
 
 for (i in seq_len(nrow(src_freq))) {
   k <- as.character(src_freq$value[i])
-  
+
   message(sprintf(
     "  · %-24s %10d px  (%5.1f%%)",
     src_lab[k],

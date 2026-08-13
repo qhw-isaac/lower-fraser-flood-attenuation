@@ -46,7 +46,7 @@ source_coverage <- terra::ifel(!is.na(lulc), 1L, NA_integer_)
 safe_writeRaster(source_coverage,
                  file.path(paths()$processed, "03_lulc_source_coverage.tif"))
 
-# warn if the NALCMS/AAFC clips is smaller than the upstream AOI clip
+# warn if the NALCMS/AAFC clip is smaller than the upstream AOI
 src_px <- terra::global(!is.na(source_coverage), "sum", na.rm = TRUE)[1, 1]
 aoi_px <- terra::global(!is.na(aoi_mask), "sum", na.rm = TRUE)[1, 1]
 gap <- 1 - src_px / aoi_px
@@ -70,7 +70,12 @@ nalcms_codes <- readr::read_csv(here::here("lookup", "nalcms_classes.csv"),
                                 show_col_types = FALSE)
 
 nat_codes <- nalcms_codes$nalcms_code[nalcms_codes$is_natural]
-nat_mask <- terra::ifel(lulc %in% nat_codes, 1, 0)
+# mask to where land cover was actually mapped: ifel() returns 0 outside the AOI
+# as well as inside it, which writes 35 million phantom "not natural" cells.
+# Harmless where the layer is read as `== 1` (08) or summed (12), but 99's
+# nat_frac takes a mean per sub-basin, which those zeros pull down for any basin
+# reaching the edge of the land-cover footprint.
+nat_mask <- terra::mask(terra::ifel(lulc %in% nat_codes, 1, 0), lulc)
 
 safe_writeRaster(nat_mask, file.path(paths()$processed, "03_lulc_natural_mask.tif"))
 
@@ -97,13 +102,22 @@ qa_png("03_lulc_sources.png", ncol = 2, function() {
   op <- graphics::par(mfrow = c(1, 2))
   on.exit(graphics::par(op), add = TRUE)
   terra::plot(lulc_src, type = "classes", levels = c("NALCMS", "AAFC ACI"),
-              col = c("forestgreen", "goldenrod"), axes = TRUE, main = "")
-  terra::plot(nat_mask, type = "classes", levels = c("not natural", "natural"),
-              col = c("grey85", "forestgreen"), axes = TRUE, main = "")
+              col = c("forestgreen", "goldenrod"), axes = TRUE,
+              main = "Land-cover source per pixel")
+  # grey is the mapped classes outside the ecosystems this model credits with
+  # retention (cropland, built-up, barren, snow/ice), not "unnatural" ground.
+  # Water is masked out of lulc above, so it draws blank.
+  terra::plot(nat_mask, type = "classes",
+              levels = c("cropland, built-up, barren or snow/ice",
+                         "natural ecosystem"),
+              col = c("grey85", "forestgreen"), axes = TRUE,
+              main = "Ecosystems credited with retention")
 })
 
-# every class present in the model, with mapped water drawn over it
-qa_png("03_lulc_classes.png", panel_w = 1400, function() {
+# every class present in the model, with mapped water drawn over it.
+# panel_w carries the legend as well as the map: the longest class names need
+# roughly a third of the canvas, and at 1400 they were being clipped
+qa_png("03_lulc_classes.png", panel_w = 1750, function() {
   lulc_plot <- lulc
   lulc_plot[lulc_plot %in% aafc_codes$aafc_code[aafc_codes$is_crop]] <- 200L
 
@@ -121,7 +135,11 @@ qa_png("03_lulc_classes.png", panel_w = 1400, function() {
   lulc_plot <- terra::categories(lulc_plot, value = data.frame(
     id = ids, label = c("No data", labs, "Cropland (AAFC)")))
 
-  terra::plot(lulc_plot, type = "classes", axes = TRUE, main = "")
+  # terra puts the class legend in the right margin, so that margin has to be
+  # wide enough for the longest label; the default left it hanging off the device
+  terra::plot(lulc_plot, type = "classes", axes = TRUE,
+              main = "Land-cover classes in the model",
+              mar = c(3.1, 3.1, 2.6, 11.5))
   terra::plot(water_qa, add = TRUE, legend = FALSE, col = "#74add1")
 })
 

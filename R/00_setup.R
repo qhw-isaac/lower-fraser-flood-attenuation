@@ -24,7 +24,7 @@ suppressPackageStartupMessages({
 
   # network / topology
   library(igraph)         # routing graph over subbasins
-  
+
   # interactive map
   library(jsonlite)
 })
@@ -98,10 +98,43 @@ data_path <- function(id, ...) {
 # ==============================================================================
 
 # load an area-of-interest polygon: "upstream" = contributing watersheds (built
-# by 02), "downstream" = Lower Mainland demand area (built by 01)
-read_aoi <- function(role = c("upstream", "downstream")) {
+# by 02), "downstream" = Lower Mainland demand area (built by 01),
+# "downstream_land" = the same demand area clipped to the coast (also 01)
+read_aoi <- function(role = c("upstream", "downstream", "downstream_land")) {
   role <- match.arg(role)
   sf::st_read(file.path(paths()$processed, paste0("01_aoi_", role, ".gpkg")), quiet = TRUE)
+}
+
+# the demand AOI as it should be drawn. Regional-district boundaries run far out
+# into the Strait of Georgia, so on a map framed on land data the border leaves
+# the panel mid-line. 01 writes a coast-clipped copy that closes on the
+# shoreline. Falls back to the administrative polygon if that copy is missing.
+aoi_display <- function() {
+  f <- file.path(paths()$processed, "01_aoi_downstream_land.gpkg")
+  if (file.exists(f)) sf::st_read(f, quiet = TRUE) else read_aoi("downstream")
+}
+
+# bounding box spanning several layers, so a map framed on one does not clip
+# another drawn on top. Accepts sf and terra objects, returns xlim/ylim for
+# terra::plot().
+span_bbox <- function(..., pad = 0.02) {
+  as_box <- function(x) {
+    if (inherits(x, c("SpatRaster", "SpatVector", "SpatExtent"))) {
+      v <- as.vector(terra::ext(x))
+      c(xmin = v[["xmin"]], xmax = v[["xmax"]],
+        ymin = v[["ymin"]], ymax = v[["ymax"]])
+    } else {
+      b <- sf::st_bbox(x)
+      c(xmin = b[["xmin"]], xmax = b[["xmax"]],
+        ymin = b[["ymin"]], ymax = b[["ymax"]])
+    }
+  }
+  bbs <- lapply(Filter(Negate(is.null), list(...)), as_box)
+  grab <- function(k, f) f(vapply(bbs, function(b) b[[k]], numeric(1)))
+  x <- c(grab("xmin", min), grab("xmax", max))
+  y <- c(grab("ymin", min), grab("ymax", max))
+  list(xlim = x + c(-1, 1) * pad * diff(x),
+       ylim = y + c(-1, 1) * pad * diff(y))
 }
 
 # empty 30 m raster over the AOI, snapped to clean WORKING_RES_M multiples
@@ -118,7 +151,7 @@ grid_template <- function(aoi = read_aoi("upstream")) {
   )
 }
 
-# reproject/resample any raster onto the shared 30 m gric
+# reproject/resample any raster onto the shared 30 m grid
 align_to_grid <- function(r, method = "near", template = NULL) {
   if (is.null(template)) {
     lulc_f <- file.path(paths()$processed, "03_lulc_values.tif")
@@ -131,9 +164,9 @@ align_to_grid <- function(r, method = "near", template = NULL) {
 # HELPERS: census geography
 # ==============================================================================
 # 2021 Census dissemination areas (DAs) over the downstream AOI. DAs are the
-# finest standard census geography (400-700 people), allowing us to dive deeper
-# beyond subdivisions that span many watersheds.
-
+# finest standard census geography (400-700 people), finer than the census
+# subdivisions that span many watersheds.
+#
 # Built from two StatCan downloads: the national DA boundary file, and the
 # geographic attribute file, which counts population by dissemination block and
 # is summed to DA here.

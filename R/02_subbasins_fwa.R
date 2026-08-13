@@ -1,30 +1,29 @@
 # ==============================================================================
-# 02_subbasins_fwa.R — sub-basin polygons + downstream topology + upstream AOI
+# 02_subbasins_fwa.R: sub-basin polygons + downstream topology + upstream AOI
 # ------------------------------------------------------------------------------
 # Replaces the national-study HydroBASINS L12 with the BC Freshwater Atlas
-# Assessment Watersheds data product. FWA has no NEXT_DOWN field, so we derive 
-# the downstream topology from the FWA watershed-code system.
+# assessment watersheds. The FWA has no field naming the next watershed
+# downstream, so this script works that out from the FWA watershed codes.
 #
 # Inputs:
 #   WHSE_BASEMAPPING.FWA_ASSESSMENT_WATERSHEDS_POLY (DataBC WFS, via bcdata)
 #   fwa_stream_networks (FWA_STREAM_NETWORKS_SP.gdb)
-#   hydrobasins_l12 — (hydrobasins_l12.shp)
+#   US transboundary providers: WBD HUC12 + NHDPlus flowlines (USGS web
+#     services, via nhdplusTools), replacing the coarser HydroBASINS L12 splice
 #   data/processed/01_aoi_downstream.gpkg
 #
 # Outputs (data/processed/):
-#   02_subbasins.gpkg — sub-basin polygons + tags
-#   02_topology.csv — focal_id, ds_id, reach_km
+#   02_subbasins.gpkg   sub-basin polygons + tags
+#   02_topology.csv   focal_id, ds_id, reach_km
 #   01_aoi_upstream.gpkg
 # ==============================================================================
 
 source(here::here("R", "00_setup.R"))
 
-# Lower Mainland demand polygon (MVRD ∪ FVRD)
+# the Lower Mainland demand polygon (MVRD ∪ FVRD)
 downstream_aoi <- read_aoi("downstream")
 
 # ---- 1. FWA assessment watersheds --------------------------------------------
-suppressPackageStartupMessages(library(bcdata))
-
 # expand the AOI by the flow-distance cap + edge buffer
 fwa_buf <- sf::st_buffer(sf::st_union(downstream_aoi),
                          MAX_FLOW_DIST_KM * 1000 + EDGE_BUFFER_M) |> sf::st_geometry()
@@ -36,18 +35,24 @@ fwa <- bcdc_query_geodata("WHSE_BASEMAPPING.FWA_ASSESSMENT_WATERSHEDS_POLY") |>
   filter(INTERSECTS(fwa_buf)) |>
   collect()
 
-# drop the CAD-annotation blob column, re-project to BC Albers
+# drop unneeded column, re-project to BC Albers
 fwa <- fwa[, setdiff(names(fwa), "SE_ANNO_CAD_DATA")] |>
   sf::st_transform(PROJECT_CRS)
 
-# ---- 2. Parse watershed code -------------------------------------------------
-# FWA_WATERSHED_CODE "100-190442-244975-...-000000" = a base drainage (100) plus
-# six-digit junction segments ordered DOWNSTREAM -> UPSTREAM. LOCAL_WATERSHED_CODE
-# adds one segment giving position along the watershed's own stream (smaller =
-# further downstream)
+# Keep a copy of the survey's own shapes before 4c and 4d start cutting and
+# merging them. Step 4e needs it to tell apart a fragment the FWA itself mapped
+# from one this script created. 41 of these watersheds arrive in several pieces.
+fwa_source_geom <- stats::setNames(sf::st_geometry(fwa),
+                                   as.character(fwa$WATERSHED_FEATURE_ID))
 
-# split an FWA code into its non-zero tributary segments (drop 000000 segments)
-none_zero <- function(code) {
+# ---- 2. Parse watershed code -------------------------------------------------
+# FWA_WATERSHED_CODE "100-190442-244975-...-000000" is a base drainage (100)
+# plus six-digit junction segments ordered DOWNSTREAM -> UPSTREAM.
+# LOCAL_WATERSHED_CODE adds one more segment giving position along the
+# watershed's own stream, where smaller is further downstream.
+
+# an FWA code's non-zero tributary segments
+non_zero <- function(code) {
   s <- strsplit(code, "-", fixed = TRUE)[[1]]
   s[s != "000000"]
 }
@@ -58,11 +63,11 @@ base <- fwa |>
   dplyr::transmute(id = WATERSHED_FEATURE_ID,
                    magnitude = WATERSHED_MAGNITUDE,
                    area_km2 = AREA_HA / 100,
-                   fwa = FWA_WATERSHED_CODE, 
+                   fwa = FWA_WATERSHED_CODE,
                    loc = LOCAL_WATERSHED_CODE)
 
 # parse each watershed's FWA code into its tributary hierarchy
-segments <- lapply(base$fwa, none_zero)
+segments <- lapply(base$fwa, non_zero)
 
 # depth = number of levels in the hierarchy (higher = farther upstream)
 depth <- lengths(segments)
@@ -76,82 +81,79 @@ measure <- as.numeric(
 # no local subdivision -> 0
 measure[is.na(measure)] <- 0
 
-# lookup: watershed id -> row number, for faster indexing
+# lookup from watershed id to row number, for faster indexing
 row_of_id <- setNames(seq_len(nrow(base)), base$id)
 
 # ---- 3. Pairwise downstream test ---------------------------------------------
-# is_downstream(a, b): TRUE if b lies downstream of a. The shared FWA address
-# tests whether they sit on the same drainage path; the local measure tests
-# whether b is lower than a on that path.
+# is_downstream(a, b) is TRUE when b lies downstream of a. The shared part of
+# the FWA address tells us whether the two sit on the same drainage path. The
+# local measure tells us whether b is further down that path than a.
 
 is_downstream <- function(a, b) {
 
-  # convert watershed IDs to row positions
   row_a <- row_of_id[[as.character(a)]]
   row_b <- row_of_id[[as.character(b)]]
 
-  # FWA tributary addresses for a and b
   addr_a <- segments[[row_a]]
   addr_b <- segments[[row_b]]
 
-  # downstream watershed cannot be deeper in the tributary hierarchy than a
+  # a downstream watershed cannot sit deeper in the tributary hierarchy
   if (length(addr_b) > length(addr_a)) return(FALSE)
 
-  # b must share the beginning of a's FWA address
+  # b must share the start of a's FWA address
   if (!all(addr_b == addr_a[seq_along(addr_b)])) return(FALSE)
 
-  # two independent coastal catchments may both share the ocean as their outlet,
-  # but they never flow into one another (e.g. Sunshine Coast vs North Shore)
+  # two coastal catchments can share the ocean as their outlet without ever
+  # flowing into one another (Sunshine Coast vs North Shore)
   if (base$magnitude[row_a] == 0 && base$magnitude[row_b] == 0) return(FALSE)
 
-  # flow should only accumulate downstream, so b should be > or = upstream network magnitude as a
+  # flow only accumulates downstream, so b cannot carry less network than a
   if (base$magnitude[row_b] < base$magnitude[row_a]) return(FALSE)
 
   if (length(addr_b) == length(addr_a)) {
-    # case 1: same tributary, where b is downstream if its local position is lower than a
+    # on the same tributary, b is downstream if it sits lower along it
     measure[row_b] < measure[row_a]
 
   } else {
-    # case 2: b is on a downstream trunk/main stem.
-    # the next segment in a's FWA address marks where a's tributary joins b's stream
+    # b is on a downstream trunk. The next segment of a's address marks where
+    # a's tributary joins b's stream, and b must be at or below that confluence
     confluence <- as.numeric(addr_a[length(addr_b) + 1])
-
-    # b is downstream only if it is at or below that confluence.
     measure[row_b] <= confluence
   }
 }
 
 # ---- 4. NEXT_DOWN = adjacent downstream neighbour carrying the most flow ------
-# find shared boundaries between watersheds
 touch <- sf::st_touches(fwa)
 
-# expand to one row per (a, neighbour b) pair
+# one row per (watershed, sharing a boundary with) pair
 pairs <- data.frame(a = rep(base$id, lengths(touch)),
                     b = base$id[unlist(touch)])
 
-# check if a flow into b (or if b is downstream)
 pairs$flows <- mapply(is_downstream, pairs$a, pairs$b)
-
-# identify b's magnitude to later pick the trunk among neighbours
 pairs$b_magnitude <- base$magnitude[row_of_id[as.character(pairs$b)]]
 
-# choose one downstream neighbour per watershed: the highest-magnitude = the trunk
+# one downstream neighbour per watershed, taking the highest magnitude as the
+# trunk
 next_down <- pairs |>
-  dplyr::filter(flows) |> # keep only pairs where a -> b
+  dplyr::filter(flows) |>
   dplyr::group_by(a) |>
-  dplyr::slice_max(b_magnitude, n = 1, with_ties = FALSE) |> # choose the downstream neighbour most likely to be the main trunk
+  dplyr::slice_max(b_magnitude, n = 1, with_ties = FALSE) |>
   dplyr::ungroup() |>
   dplyr::select(id = a, next_down = b)
 
-# join next down to base
+# no downstream neighbour means a domain outlet, recorded as 0
 base <- base |>
   dplyr::left_join(next_down, by = "id") |>
-  dplyr::mutate(next_down = dplyr::coalesce(next_down, 0)) # replaces missing values with 0
+  dplyr::mutate(next_down = dplyr::coalesce(next_down, 0))
 
 # ---- 4b. Reach length = measured stream length from FWA stream networks -------
-# preferred: clipped length of the watershed's own-code mainstem
-# fallback:  dominant BLUE_LINE_KEY inside the watershed
-reach_from_streams <- function(fwa_sf, code_by_id, aoi_buf) { # polygon, lookup table, study area
+# Preferred measure is the clipped length of the watershed's own main stem.
+# Where that is missing, fall back to the longest single stream inside it.
+# The stream network is read once and shared. 4b measures reach length here,
+# and 4c reads the stream names to settle who owns the ground at the border.
+.fwa_streams <- NULL
+fwa_streams <- function(aoi_buf) {
+  if (!is.null(.fwa_streams)) return(.fwa_streams)
   gdb <- data_path("fwa_stream_networks")
   message("reading AOI streams from FWA_STREAM_NETWORKS gdb…")
 
@@ -161,7 +163,8 @@ reach_from_streams <- function(fwa_sf, code_by_id, aoi_buf) { # polygon, lookup 
   spatial_layers <- layers$name[!is.na(layers$geomtype)]
 
   # keep only fields needed for stream-length assignment
-  keep_cols <- c("FWA_WATERSHED_CODE", "BLUE_LINE_KEY", "LENGTH_METRE")
+  keep_cols <- c("FWA_WATERSHED_CODE", "BLUE_LINE_KEY", "LENGTH_METRE",
+                 "GNIS_NAME")
   stream_layers <- list()
 
   for (layer in spatial_layers) {
@@ -172,7 +175,12 @@ reach_from_streams <- function(fwa_sf, code_by_id, aoi_buf) { # polygon, lookup 
     }
   }
 
-  streams <- do.call(rbind, stream_layers)
+  .fwa_streams <<- do.call(rbind, stream_layers)
+  .fwa_streams
+}
+
+reach_from_streams <- function(fwa_sf, code_by_id, aoi_buf) { # polygon, lookup table, study area
+  streams <- fwa_streams(aoi_buf)
 
   # clip stream segments to watershed boundaries
   message("clipping ", nrow(streams), " stream segments to watershed boundaries…")
@@ -190,16 +198,17 @@ reach_from_streams <- function(fwa_sf, code_by_id, aoi_buf) { # polygon, lookup 
   clip_tbl <- sf::st_drop_geometry(clip)
   clip_tbl$clip_km <- as.numeric(sf::st_length(clip)) / 1000
 
-  # primary reach length:
-  # sum clipped stream pieces whose FWA code matches the watershed's own code
+  # primary reach length. Sum the clipped stream pieces whose FWA code matches
+  # the watershed's own code. which() drops the unmatched rows, since a segment
+  # with no code compares as NA and would otherwise subscript in a row of NAs.
   own_reach <- clip_tbl[
-    clip_tbl$FWA_WATERSHED_CODE == code_by_id[as.character(clip_tbl$id)],
+    which(clip_tbl$FWA_WATERSHED_CODE == code_by_id[as.character(clip_tbl$id)]),
   ] |>
     dplyr::group_by(id) |>
     dplyr::summarise(km = sum(clip_km), .groups = "drop")
 
-  # fallback reach length:
-  # use the single BLUE_LINE_KEY with the most clipped length inside the watershed
+  # fallback reach length. Use the single stream with the most clipped length
+  # inside the watershed.
   dom_blue <- clip_tbl |>
     dplyr::group_by(id, BLUE_LINE_KEY) |>
     dplyr::summarise(l = sum(clip_km), .groups = "drop") |>
@@ -236,79 +245,614 @@ message(
   " watersheds"
 )
 
-# ---- 4c. Splice in US (HydroBASINS) providers draining into the BC AOI --------
-# FWA coverage stops at the 49th parallel, but several Whatcom County (US)
-# watersheds drain north into the BC demand area and so provide real upstream
-# attenuation. FWA is limited to BC, so we take those units from HydroBASINS L12,
-# keep only the ones that (a) sit south of the border and (b) actually route into
-# the demand AOI, and append them to base/fwa as extra providers.
+# ---- 4c. Splice in US (Whatcom) providers draining into the BC AOI ------------
+# FWA coverage stops at the 49th parallel, but several Whatcom County
+# watersheds (Chilliwack, Sumas, Silesia, Tomyhoi) drain north into the BC
+# demand area. Pull those from the US national hydrography with nhdplusTools.
+# WBD HUC12 gives the shapes and the routing, NHDPlus flowlines the reach
+# length. This step keeps the units that route toward Canada, and step 5 drops
+# anything too far upstream, so south-draining basins fall out on their own.
 
 # columns carried on the spatial layer (must match the FWA layer's schema below)
 us_cols <- c("WATERSHED_FEATURE_ID", "WATERSHED_ORDER", "WATERSHED_MAGNITUDE",
              "FWA_WATERSHED_CODE", "GNIS_NAME_1", "AREA_HA")
 
-# read HydroBASINS, keep only units intersecting the buffered AOI
-hydrobasins <- sf::st_read(data_path("hydrobasins_l12"), quiet = TRUE) |>
-  sf::st_transform(PROJECT_CRS)
-hydrobasins <- hydrobasins[as.logical(
-  sf::st_intersects(hydrobasins, sf::st_union(fwa_buf), sparse = FALSE)[, 1]), ]
+us <- tryCatch({
+  message("pulling US WBD HUC12 + NHDPlus flowlines via nhdplusTools…")
 
-# flag US units by centroid latitude (HydroBASINS spans both sides of the border)
-centroid_lat <- sf::st_coordinates(
-  sf::st_transform(suppressWarnings(sf::st_centroid(sf::st_geometry(hydrobasins))), 4326))[, 2]
-is_us <- centroid_lat < 49.0
+  # US portion of the buffered AOI (the strip south of the 49th parallel).
+  # fwa_buf is already an sfc (built with st_geometry above), so transform it
+  # directly.
+  buf_ll <- sf::st_transform(fwa_buf, 4326)
+  south  <- sf::st_as_sfc(sf::st_bbox(
+    c(xmin = -130, ymin = 40, xmax = -110, ymax = 49), crs = 4326))
+  bb <- sf::st_bbox(sf::st_intersection(buf_ll, south))
 
-# build the HydroBASINS flow graph (HYBAS_ID -> NEXT_DOWN), then filter for units
-# that can reach a unit that touches the demand AOI
-hydrobasins_graph <- igraph::graph_from_data_frame(
-  hydrobasins |>
-    sf::st_drop_geometry() |>
-    dplyr::filter(NEXT_DOWN != 0, NEXT_DOWN %in% HYBAS_ID) |>
-    dplyr::transmute(from = as.character(HYBAS_ID), to = as.character(NEXT_DOWN)),
-  vertices = data.frame(name = as.character(hydrobasins$HYBAS_ID)))
+  # WBD HUC12 over the strip. The WFS limits query size and refuses large or
+  # complex areas, so cut the wide border strip into 2-degree longitude tiles,
+  # pull each one by bounding box, and combine them. This takes the Washington
+  # units and the Canadian ones they drain into, since those are what show a
+  # unit routing across the border. Everything is clipped back afterwards.
+  xcuts <- unname(unique(c(seq(bb["xmin"], bb["xmax"], by = 2), bb["xmax"])))
+  ymin <- unname(bb["ymin"]); ymax <- unname(bb["ymax"])
+  tiles <- Map(function(x0, x1) sf::st_as_sfc(sf::st_bbox(
+    c(xmin = x0, ymin = ymin, xmax = x1, ymax = ymax), crs = 4326)),
+    xcuts[-length(xcuts)], xcuts[-1])
+  wbd_list <- lapply(tiles, function(tl)
+    tryCatch(nhdplusTools::get_huc(AOI = tl, type = "huc12"),
+             error = function(e) NULL))
+  wbd_list <- wbd_list[!vapply(wbd_list, is.null, logical(1))]
+  if (length(wbd_list) == 0) stop("WBD HUC12 pull returned nothing")
+  wbd <- do.call(rbind, wbd_list)
+  wbd <- wbd[!is.na(wbd$huc12) & !duplicated(wbd$huc12), ] |>
+    sf::st_transform(PROJECT_CRS) |> sf::st_make_valid() |>
+    # the WBD boundaries are very detailed, about 80 MB raw. Simplify to ~100 m
+    # so the geometry work below and the saved layer stay manageable.
+    sf::st_simplify(dTolerance = 100, preserveTopology = TRUE)
+  wbd <- wbd[lengths(sf::st_intersects(wbd, fwa_buf)) > 0, ]
+  wbd$huc12 <- as.character(wbd$huc12)
+  wbd$tohuc <- as.character(wbd$tohuc)
 
-# units touching the demand AOI = the targets we test reachability against
-aoi_unit_ids <- hydrobasins$HYBAS_ID[as.logical(
-  sf::st_intersects(hydrobasins, downstream_aoi, sparse = FALSE)[, 1])]
-
-# reaches_aoi = finite downstream distance to at least one AOI-touching unit
-reachable <- is.finite(apply(igraph::distances(
-  hydrobasins_graph, to = igraph::V(hydrobasins_graph)[name %in% as.character(aoi_unit_ids)],
-  mode = "out"), 1, min))
-hydrobasins$reaches_aoi <- reachable[match(as.character(hydrobasins$HYBAS_ID),
-                                           igraph::V(hydrobasins_graph)$name)]
-
-# the providers we keep: south of the border AND draining into the demand AOI
-us_ids   <- hydrobasins$HYBAS_ID[is_us & hydrobasins$reaches_aoi %in% TRUE]
-us_units <- hydrobasins[hydrobasins$HYBAS_ID %in% us_ids, ]
-
-if (nrow(us_units) > 0) {
-  # Cross-border NEXT_DOWN: keep a US unit if its downstream neighbour is a kept
-  # US unit. Otherwise it flows into BC, so re-point it at the
-  # FWA watershed that overlaps its (BC-side) HydroBASINS neighbour the most
-  us_next_down <- us_units$NEXT_DOWN
-  for (i in which(!(us_next_down %in% us_ids))) {
-    target <- hydrobasins[hydrobasins$HYBAS_ID == us_units$NEXT_DOWN[i], ]
-    overlap <- if (nrow(target)) suppressWarnings(
-      sf::st_intersection(fwa[, "WATERSHED_FEATURE_ID"], sf::st_geometry(target))) else target[0, ]
-    us_next_down[i] <- if (nrow(overlap))
-      overlap$WATERSHED_FEATURE_ID[which.max(as.numeric(sf::st_area(overlap)))] else 0
+  # Drop the marine and open-water units (hutype F = frontal, W = water). They
+  # cover the Strait of Georgia and Puget Sound and overlap the coastal FWA
+  # units, which would make it look as though water routes across the ocean.
+  if ("hutype" %in% names(wbd)) {
+    n_marine <- sum(wbd$hutype %in% c("F", "W"))
+    if (n_marine > 0)
+      message("  dropped ", n_marine, " marine/frontal WBD unit(s) (hutype F/W)")
+    wbd <- wbd[!(wbd$hutype %in% c("F", "W")), ]
   }
-  # append providers to the attribute table; no FWA streams in the US, so reach
-  # length is estimated from area via Hack's law (reach_km ≈ 1.4 * area_km2^0.6)
-  base <- dplyr::bind_rows(base, data.frame(
-    id = us_units$HYBAS_ID, magnitude = NA_real_, area_km2 = us_units$SUB_AREA,
-    fwa = NA_character_, loc = NA_character_, next_down = us_next_down,
-    reach_km = 1.4 * us_units$SUB_AREA^0.6))
-  # and to the spatial layer, mapped into the FWA schema (US-only fields left NA)
-  us_polys <- us_units |>
-    dplyr::transmute(
-    WATERSHED_FEATURE_ID = HYBAS_ID, WATERSHED_ORDER = NA_real_,
-    WATERSHED_MAGNITUDE = NA_real_, FWA_WATERSHED_CODE = NA_character_,
-    GNIS_NAME_1 = NA_character_, AREA_HA = SUB_AREA * 100)
-  fwa <- rbind(fwa[, us_cols], us_polys)
-  message("spliced ", nrow(us_units), " US (HydroBASINS) providers; flow-distance trim decides which survive")
+
+  # A border outlet is a Washington unit that drains out of the US set and also
+  # overlaps an FWA watershed. The unclipped WBD shapes reach past 49°N onto
+  # FWA ground, so st_intersects finds the units whose streams cross on land.
+  usid  <- wbd$huc12[grepl("WA", wbd$states)]
+  to_us <- wbd$tohuc[match(usid, wbd$huc12)]
+  exit_idx <- match(usid[!(to_us %in% usid)], wbd$huc12)   # units leaving the set
+  overlaps <- lengths(sf::st_intersects(wbd[exit_idx, ], fwa)) > 0
+  outlet_fwa <- list()
+  for (i in exit_idx[overlaps]) {
+    hits <- sf::st_intersects(wbd[i, ], fwa)[[1]]
+    if (length(hits) == 0) next
+    # among overlapping FWA units, pick the one with the largest overlap area
+    cands <- fwa[hits, ]
+    ov <- suppressWarnings(sf::st_intersection(
+      sf::st_geometry(wbd[i, ]), sf::st_geometry(cands)))
+    ov_area <- vapply(ov, function(g) {
+      if (sf::st_is_empty(g)) return(0)
+      as.numeric(sf::st_area(g))
+    }, numeric(1))
+    best <- which.max(ov_area)
+    if (length(best) == 1 && ov_area[best] > 0)
+      outlet_fwa[[wbd$huc12[i]]] <- cands$WATERSHED_FEATURE_ID[best]
+  }
+  # provider set = the outlets plus everything upstream of them in the US graph
+  eh <- data.frame(from = usid, to = to_us)
+  eh <- eh[eh$to %in% usid, ]
+  gU <- igraph::graph_from_data_frame(eh, vertices = data.frame(name = usid),
+                                      directed = TRUE)
+  keep <- unique(c(names(outlet_fwa), unlist(lapply(names(outlet_fwa),
+    function(o) names(igraph::subcomponent(gU, o, mode = "in"))))))
+  wbd_us <- wbd[wbd$huc12 %in% keep, ]
+
+  # Everything above has to run on the unclipped US shapes. A watershed that
+  # crosses the border only shows up as a border outlet because its shape
+  # reaches north past 49°N onto ground the FWA also maps.
+  #
+  # That shared ground now has to go back to the FWA. About 660 km² north of
+  # the line is mapped by both surveys, and if it stays in both, steps 3, 6 and
+  # 9 count the same forest and the same rainfall twice.
+  #
+  # Handing back all of it goes too far, because some watersheds really do
+  # straddle the line. Johnson Creek is 54 km², with 47 south of the border and
+  # a 7 km² tail north of it that sits inside the FWA's Sumas River watershed.
+  # Cut that tail off and the creek stops dead at the border while its own
+  # headwaters are credited to a different river.
+  #
+  # So look at each overlap on its own and ask whether the FWA maps a named
+  # stream there. If it does, the FWA has mapped that ground as part of a
+  # watershed it recognises, and keeps it. If it maps only unnamed ditches, the
+  # US survey has drawn the better catchment and the US unit keeps its tail.
+  # Comparing areas cannot tell the two cases apart, and neither can the FWA
+  # stream codes, which label every ditch on the old Sumas prairie with the
+  # river it eventually reaches. LOBE_FWA_MAX stops the rule moving more than
+  # a tail.
+  #
+  # Whatever a US unit keeps is also taken off the FWA watershed it came from,
+  # just below the splice where `fwa` is in scope. Doing only one side of that
+  # brings the double count straight back.
+  LOBE_MIN_KM2 <- 0.5    # ignore slivers this small, they are not watersheds
+  LOBE_FWA_MAX <- 0.25   # never move more than this share of an FWA watershed
+
+  wbd_us <- wbd_us[!duplicated(wbd_us$huc12), ]
+  fwa_near <- fwa[lengths(sf::st_intersects(fwa, wbd_us)) > 0, ]
+  fwa_trim <- list()
+  if (nrow(fwa_near) > 0) {
+    before_km2 <- as.numeric(sf::st_area(wbd_us)) / 1e6
+    fwa_area_m2 <- as.numeric(sf::st_area(fwa_near))
+    # BC's streams over the border zone, which is what the test reads
+    str_near <- fwa_streams(fwa_buf)
+    str_near <- str_near[lengths(sf::st_intersects(
+      str_near, sf::st_union(sf::st_geometry(wbd_us)))) > 0, ]
+    message("  · ", nrow(str_near),
+            " FWA stream segment(s) over the contested border zone")
+
+    # Record which FWA watershed this US unit is the other half of, while the
+    # US shape still holds its Canadian portion. The FWA watershed it
+    # covers most is the one both surveys drew over the same ground. This test
+    # needs no stream name, routing or terrain, so unnamed units work too.
+    hits <- sf::st_intersects(wbd_us, fwa_near)
+    xb_partner <- rep(NA_real_, nrow(wbd_us)); xb_frac <- rep(0, nrow(wbd_us))
+    lobe_geom <- vector("list", nrow(wbd_us))   # ground each US unit keeps
+    lobe_log  <- list()                         # one row per contested pair
+    for (k in seq_len(nrow(wbd_us))) {
+      h <- hits[[k]]; if (!length(h)) next
+      gi <- lapply(h, function(q) suppressWarnings(sf::st_intersection(
+        sf::st_geometry(wbd_us)[k], sf::st_geometry(fwa_near)[q])))
+      a <- vapply(gi, function(g)
+        if (!length(g)) 0 else sum(as.numeric(sf::st_area(g))), numeric(1))
+      if (!length(a) || max(a) <= 0) next
+      xb_partner[k] <- fwa_near$WATERSHED_FEATURE_ID[h[which.max(a)]]
+      xb_frac[k] <- max(a) / (before_km2[k] * 1e6)
+
+      # apply the named-stream rule described above. For each overlap, check the
+      # size floor and LOBE_FWA_MAX first, then look for a named FWA stream.
+      f_us  <- a / (before_km2[k] * 1e6)
+      f_fwa <- a / fwa_area_m2[h]
+      take <- rep(FALSE, length(h))
+      why  <- rep("", length(h))
+      for (m in seq_along(h)) {
+        if (a[m] < LOBE_MIN_KM2 * 1e6) { why[m] <- "below the size floor"; next }
+        if (f_fwa[m] > LOBE_FWA_MAX) {
+          why[m] <- sprintf("%.0f%% of the FWA unit, too much to move",
+                            100 * f_fwa[m]); next
+        }
+        seg <- str_near[lengths(sf::st_intersects(str_near, gi[[m]])) > 0, ]
+        named <- unique(stats::na.omit(seg$GNIS_NAME))
+        if (length(named)) {
+          why[m] <- paste0("FWA maps ", paste(named, collapse = ", "), " here")
+          next
+        }
+        take[m] <- TRUE
+        why[m] <- sprintf("%d unnamed ditch(es), FWA does not resolve it", nrow(seg))
+      }
+      for (m in which(a > 0 & f_us >= 0.02))
+        lobe_log[[length(lobe_log) + 1]] <- data.frame(
+          us = wbd_us$name[k], fwa_name = fwa_near$GNIS_NAME_1[h[m]],
+          fwa_id = fwa_near$WATERSHED_FEATURE_ID[h[m]], km2 = a[m] / 1e6,
+          f_us = f_us[m], f_fwa = f_fwa[m], moved = take[m],
+          why = paste0(if (take[m]) "-> US   " else "-> FWA  ", why[m]))
+      if (!any(take)) next
+      lobe_geom[[k]] <- sf::st_make_valid(
+        sf::st_union(do.call(c, gi[which(take)])))
+      # this US unit keeps its tail and stays separate, so clear the overlap
+      # record, or 4d merges back what was just separated
+      if (!is.na(xb_partner[k]) &&
+          xb_partner[k] %in% fwa_near$WATERSHED_FEATURE_ID[h[which(take)]]) {
+        xb_partner[k] <- NA_real_; xb_frac[k] <- 0
+      }
+      # the same ground has to leave the FWA watershed it came from. Carry the
+      # US unit's id so the subtraction below knows where it is going.
+      for (m in which(take))
+        fwa_trim[[length(fwa_trim) + 1]] <- sf::st_sf(
+          WATERSHED_FEATURE_ID = as.numeric(fwa_near$WATERSHED_FEATURE_ID[h[m]]),
+          us_id = as.numeric(wbd_us$huc12[k]),
+          geom = sf::st_union(gi[[m]]))
+    }
+    message("  \u00b7 ", sum(xb_frac >= 0.15),
+            " US unit(s) overlap a single FWA watershed by >=15% of their area")
+
+    if (length(lobe_log)) {
+      lg <- do.call(rbind, lobe_log)
+      lg <- lg[order(-lg$km2), ]
+      message("  \u00b7 contested ground, US unit vs the FWA watershed claiming it:")
+      for (r in seq_len(nrow(lg)))
+        message(sprintf("      %-36s %-20s %6.1f km2  f_us %.2f  f_fwa %.2f  %s",
+                        substr(lg$us[r], 1, 36),
+                        substr(ifelse(is.na(lg$fwa_name[r]),
+                                      paste0("#", lg$fwa_id[r]), lg$fwa_name[r]),
+                               1, 20),
+                        lg$km2[r], lg$f_us[r], lg$f_fwa[r], lg$why[r]))
+    }
+
+    us_geom <- suppressWarnings(sf::st_difference(
+      sf::st_geometry(wbd_us), sf::st_union(sf::st_geometry(fwa_near))))
+    # hand the transferred lobes back to the US units they drain to
+    for (k in which(!vapply(lobe_geom, is.null, logical(1))))
+      us_geom[k] <- sf::st_union(us_geom[k], lobe_geom[[k]])
+    us_geom <- sf::st_make_valid(us_geom)
+    # the same collection trap as on the FWA side below, so keep it polygonal
+    for (k in which(sf::st_geometry_type(us_geom) == "GEOMETRYCOLLECTION")) {
+      p <- sf::st_collection_extract(us_geom[k], "POLYGON", warn = FALSE)
+      us_geom[k] <- if (length(p) > 1) sf::st_combine(p) else p
+    }
+    sf::st_geometry(wbd_us) <- us_geom
+    # A unit swallowed whole by the FWA footprint is entirely double-counted
+    # and has nothing of its own left to contribute. Dropping it breaks the
+    # tohuc chain of anything upstream, which then falls to next_down = 0 and
+    # is trimmed in step 5 rather than routed on a unit that no longer exists.
+    gone <- sf::st_is_empty(sf::st_geometry(wbd_us))
+    if (any(gone)) {
+      message("  dropped ", sum(gone),
+              " US unit(s) lying wholly inside the FWA footprint")
+      wbd_us <- wbd_us[!gone, ]
+      before_km2 <- before_km2[!gone]
+      xb_partner <- xb_partner[!gone]; xb_frac <- xb_frac[!gone]
+    }
+    wbd_us$areasqkm <- as.numeric(sf::st_area(wbd_us)) / 1e6
+    handed_km2 <- sum(before_km2) - sum(wbd_us$areasqkm)
+    message("  handed ", round(handed_km2, 1),
+            " km² of overlapping BC territory back to the FWA (",
+            sum(before_km2 - wbd_us$areasqkm > 0.01), " of ", nrow(wbd_us),
+            " US unit(s) trimmed)")
+
+    # one row per (FWA watershed, US unit) transfer, to apply after the splice
+    moved_km2 <- 0
+    if (length(fwa_trim)) {
+      fwa_trim <- do.call(rbind, fwa_trim)
+      moved_km2 <- sum(as.numeric(sf::st_area(fwa_trim))) / 1e6
+      message("  · moved ", round(moved_km2, 1),
+              " km² of cross-border tail the other way, to the US unit it",
+              " drains to (", nrow(fwa_trim), " FWA watershed(s) trimmed)")
+    } else {
+      fwa_trim <- NULL
+      message("  · no contested ground moved: BC's streams put every lobe in ",
+              "the drainage of the FWA watershed already holding it")
+    }
+  }
+  keep_ids <- wbd_us$huc12
+
+  # NHDPlus flowlines over the kept footprint -> measured main-channel reach per
+  # unit (mainstem = the highest stream order present in the unit). Replaces the
+  # Hack's-law area proxy used for the old HydroBASINS splice.
+  fl <- nhdplusTools::get_nhdplus(
+    AOI = sf::st_as_sfc(sf::st_bbox(sf::st_transform(wbd_us, 4326))),
+    realization = "flowline")
+  ord_col <- grep("streamorde", names(fl), ignore.case = TRUE, value = TRUE)[1]
+  fl <- sf::st_zm(fl) |> sf::st_transform(PROJECT_CRS)
+  fl$ord <- if (!is.na(ord_col)) as.integer(fl[[ord_col]]) else 1L
+  unit_poly <- wbd_us["huc12"]; names(unit_poly)[1] <- "id"
+  clip <- suppressWarnings(sf::st_intersection(fl[, "ord"], unit_poly))
+  clip <- clip[sf::st_geometry_type(clip) %in% c("LINESTRING", "MULTILINESTRING"), ]
+  clip_tbl <- sf::st_drop_geometry(clip)
+  clip_tbl$km <- as.numeric(sf::st_length(clip)) / 1000
+  reach_us <- clip_tbl |>
+    dplyr::group_by(id) |>
+    dplyr::summarise(km = sum(km[ord == max(ord)], na.rm = TRUE), .groups = "drop")
+  reach_km_us <- reach_us$km[match(keep_ids, reach_us$id)]
+  reach_km_us <- ifelse(is.na(reach_km_us) | reach_km_us <= 0,
+                        1.4 * wbd_us$areasqkm^0.6, reach_km_us)
+
+  # Set the downstream neighbour. A unit inside the US set points at the next US
+  # unit, and a border outlet points at the FWA watershed recorded above. Step 5
+  # then drops any whose chain never reaches the demand area.
+  nd <- rep(0, nrow(wbd_us))
+  internal <- wbd_us$tohuc %in% keep_ids
+  nd[internal] <- as.numeric(wbd_us$tohuc[internal])
+  out_match <- match(keep_ids, names(outlet_fwa))
+  nd[!is.na(out_match)] <- as.numeric(unlist(outlet_fwa)[out_match[!is.na(out_match)]])
+
+  list(
+    attr = data.frame(
+      id = as.numeric(keep_ids), magnitude = NA_real_,
+      area_km2 = wbd_us$areasqkm, fwa = NA_character_, loc = NA_character_,
+      next_down = nd, reach_km = reach_km_us,
+      xb_partner = if (exists("xb_partner")) xb_partner else NA_real_,
+      xb_frac = if (exists("xb_frac")) xb_frac else 0),
+    fwa_trim = fwa_trim,
+    stats = list(handed_km2 = if (exists("handed_km2")) handed_km2 else NA_real_,
+                 moved_km2  = if (exists("moved_km2"))  moved_km2  else NA_real_),
+    polys = wbd_us |>
+      dplyr::transmute(
+        WATERSHED_FEATURE_ID = as.numeric(huc12), WATERSHED_ORDER = NA_real_,
+        WATERSHED_MAGNITUDE = NA_real_, FWA_WATERSHED_CODE = NA_character_,
+        GNIS_NAME_1 = as.character(name), AREA_HA = areasqkm * 100))
+}, error = function(e) {
+  message("  ! US provider pull skipped: ", conditionMessage(e)); NULL
+})
+
+if (!is.null(us) && nrow(us$attr) > 0) {
+  # The other half of the handover in 4c. Take each piece of ground a US unit
+  # kept off the FWA watershed that also claimed it. This runs here rather than
+  # in 4c, which builds the US layer and cannot reach `fwa`.
+  if (inherits(us$fwa_trim, "sf") && nrow(us$fwa_trim) > 0) {
+    # The two surveys drew the shared boundary with different vertices, so
+    # subtracting a piece leaves hairline fragments along it. Sumas River had 27
+    # of them, the largest 0.05 km². Left in, they turn the watershed into a
+    # 28-part shape that GDAL's RFC7946 writer refuses, and it drops off the map
+    # entirely. Send them along with the piece, so both watersheds stay single
+    # shapes covering the same ground.
+    SLIVER_M2 <- 1e5
+    gcol <- sf::st_geometry(fwa)
+    ucol <- sf::st_geometry(us$polys)
+    moved <- 0; sliver_km2 <- 0
+    for (r in seq_len(nrow(us$fwa_trim))) {
+      j <- match(us$fwa_trim$WATERSHED_FEATURE_ID[r], fwa$WATERSHED_FEATURE_ID)
+      k <- match(us$fwa_trim$us_id[r], us$polys$WATERSHED_FEATURE_ID)
+      if (is.na(j)) next
+      g <- suppressWarnings(sf::st_difference(
+        gcol[j], sf::st_geometry(us$fwa_trim)[r]))
+      # Order matters here. st_make_valid is what turns a difference into a
+      # GEOMETRYCOLLECTION, so extract after it. Extract first and a collection
+      # reaches the gpkg, where exactextractr refuses the whole layer in 10.
+      g <- sf::st_make_valid(g)
+      if (any(sf::st_geometry_type(g) == "GEOMETRYCOLLECTION"))
+        g <- sf::st_collection_extract(g, "POLYGON", warn = FALSE)
+      if (!length(g) || all(sf::st_is_empty(g))) next
+      parts <- suppressWarnings(sf::st_cast(g, "POLYGON"))
+      pa <- as.numeric(sf::st_area(parts))
+      big <- pa >= SLIVER_M2
+      if (!any(big)) next
+      gcol[j] <- if (sum(big) > 1) sf::st_combine(parts[big]) else parts[big]
+      if (any(!big) && !is.na(k)) {
+        ucol[k] <- sf::st_make_valid(
+          sf::st_union(ucol[k], sf::st_combine(parts[!big])))
+        sliver_km2 <- sliver_km2 + sum(pa[!big]) / 1e6
+      }
+      # Subtract from AREA_HA rather than remeasuring the shape. AREA_HA is the
+      # FWA's own surveyed figure and every other area here comes from it, so
+      # remeasuring would fold a survey-versus-shape difference into the move.
+      lost_km2 <- (as.numeric(sf::st_area(sf::st_geometry(us$fwa_trim)[r])) +
+                     sum(pa[!big])) / 1e6
+      fwa$AREA_HA[j] <- max(fwa$AREA_HA[j] - lost_km2 * 100, 0)
+      moved <- moved + lost_km2
+      bj <- match(fwa$WATERSHED_FEATURE_ID[j], base$id)
+      if (!is.na(bj)) base$area_km2[bj] <- fwa$AREA_HA[j] / 100
+      if (!is.na(k)) {
+        us$polys$AREA_HA[k] <- us$polys$AREA_HA[k] + sum(pa[!big]) / 1e4
+        us$attr$area_km2[k] <- us$attr$area_km2[k] + sum(pa[!big]) / 1e6
+      }
+    }
+    sf::st_geometry(fwa) <- gcol
+    sf::st_geometry(us$polys) <- ucol
+    message("  · ", round(moved, 1), " km² subtracted from ", nrow(us$fwa_trim),
+            " FWA watershed(s) that the transferred tails came from (",
+            round(sliver_km2, 3), " km² of that as boundary slivers)")
+  }
+  base <- dplyr::bind_rows(base, us$attr)
+  fwa  <- rbind(fwa[, us_cols], us$polys[, us_cols])
+  message("spliced ", nrow(us$attr),
+          " US (WBD HUC12) providers; flow-distance trim decides which survive")
 }
+
+# ---- 4d. Reunite watersheds that only the border divides ---------------------
+# A stream crossing 49°N is mapped twice, once by each survey. Saar Creek is an
+# FWA assessment watershed AND a WBD subwatershed, two shapes whose only shared
+# edge is the survey boundary. Merge a pair like that back into one watershed.
+#
+# Both parts of the rule are needed.
+#   1. Their shared boundary really is the border, measured as the share of it
+#      sitting on 49°N. Below BORDER_SHARE_MIN the two meet at a real ridge.
+#   2. They are the same named stream. Touching alone is not enough, since
+#      several different US units sit against the same BC one, and merging on
+#      that would swallow real headwater units into their downstream neighbour.
+#
+# norm_stream() drops WBD's "Bear Creek-Chilliwack River" compounds, the
+# Upper/Lower/Headwater prefixes and the Creek/River suffix, and uses an alias
+# table for the streams the two countries spell differently. Names then have to
+# match exactly.
+BORDER_LAT <- 49
+BORDER_TOL_DEG <- 5e-4      # ~55 m
+BORDER_SHARE_MIN <- 0.9
+DIVIDE_MIN <- 0.5           # below this share of ridge, the edge is no divide
+XB_FRAC_MIN <- 0.15         # share of a US unit that lay inside one FWA unit
+
+dsm <- tryCatch(terra::rast(data_path("dem_glo30")), error = function(e) NULL)
+
+CROSS_BORDER_ALIASES <- c(silesia = "slesse", tomyhoi = "tamihi",
+                          ensawkwatch = "nesakwatch")
+
+norm_stream <- function(x) {
+  x <- tolower(trimws(ifelse(is.na(x), "", x)))
+  x <- sub("^.*-", "", x)                                   # WBD compound names
+  x <- gsub("^(upper|lower|middle|headwaters?|north|south|east|west) ", "", x)
+  x <- trimws(gsub(" (creek|river|brook|slough)$", "", x))
+  ifelse(x %in% names(CROSS_BORDER_ALIASES), CROSS_BORDER_ALIASES[x], x)
+}
+
+if (!is.null(us) && nrow(us$attr) > 0) {
+  us_i <- which(is.na(fwa$FWA_WATERSHED_CODE))
+  bc_i <- which(!is.na(fwa$FWA_WATERSHED_CODE))
+  nm <- norm_stream(fwa$GNIS_NAME_1)
+  ll <- sf::st_transform(fwa, 4326)
+  touch <- sf::st_intersects(fwa[us_i, ], fwa[bc_i, ])
+
+  merges <- list()
+  for (a in seq_along(us_i)) {
+    for (b in touch[[a]]) {
+      i <- us_i[a]; j <- bc_i[b]
+
+      # 1. their shared boundary is the border, measured on the lon/lat copy
+      edge_ll <- suppressWarnings(sf::st_intersection(
+        sf::st_boundary(sf::st_geometry(ll)[i]),
+        sf::st_boundary(sf::st_geometry(ll)[j])))
+      if (any(sf::st_geometry_type(edge_ll) == "GEOMETRYCOLLECTION"))
+        edge_ll <- sf::st_collection_extract(edge_ll, "LINESTRING", warn = FALSE)
+      edge_ll <- edge_ll[as.character(sf::st_geometry_type(edge_ll)) %in%
+                           c("LINESTRING", "MULTILINESTRING")]
+      if (!length(edge_ll) || all(sf::st_is_empty(edge_ll))) next
+      co_ll <- sf::st_coordinates(edge_ll)
+      on_border <- mean(abs(co_ll[, 2] - BORDER_LAT) < BORDER_TOL_DEG)
+
+      # The strongest evidence, and it stands on its own. Before the clip, this
+      # US unit covered part of the very FWA watershed now being tested, so both
+      # surveys drew the same ground. It skips the border-share test the weaker
+      # checks need.
+      bi <- match(fwa$WATERSHED_FEATURE_ID[i], base$id)
+      overlapped <- isTRUE(!is.na(base$xb_partner[bi]) &&
+        base$xb_partner[bi] == fwa$WATERSHED_FEATURE_ID[j] &&
+        base$xb_frac[bi] >= XB_FRAC_MIN)
+
+      if (!overlapped && on_border < BORDER_SHARE_MIN) next
+
+      # 2. they are the same watershed, on any one of three kinds of evidence
+      same_name <- nzchar(nm[i]) && nm[i] == nm[j]
+      drains_in <- isTRUE(base$next_down[bi] == fwa$WATERSHED_FEATURE_ID[j])
+
+      # The third test asks whether the shared edge is really a drainage divide.
+      # Sample the elevation along it and 300 m either side. Where the edge is
+      # rarely the local high point it is a hillslope rather than a ridge, and
+      # nothing but the survey line separates the two watersheds. Sweltzer and
+      # Frosst measure as ridge over 6% of their edge and Kendall's over 29%,
+      # against close to 100% for a real ridgeline. This reads the raw DSM,
+      # because 05_dem.tif is built from this script's own AOI and using it here
+      # would be circular.
+      not_a_divide <- FALSE
+      if (!overlapped && !same_name && !drains_in && !is.null(dsm)) {
+        edge_m <- sf::st_transform(edge_ll, PROJECT_CRS)
+        pts <- suppressWarnings(sf::st_cast(sf::st_line_sample(
+          sf::st_cast(edge_m, "LINESTRING", warn = FALSE), density = 1 / 300), "POINT"))
+        if (length(pts) >= 5) {
+          co <- sf::st_coordinates(pts)[, 1:2, drop = FALSE]
+          zz <- function(dy) terra::extract(dsm, terra::vect(
+            cbind(co[, 1], co[, 2] + dy), crs = PROJECT_CRS, type = "points"),
+            ID = FALSE)[, 1]
+          z0 <- zz(0); zN <- zz(300); zS <- zz(-300)
+          good <- is.finite(z0) & is.finite(zN) & is.finite(zS)
+          if (sum(good) >= 5)
+            not_a_divide <- mean(z0[good] >= pmax(zN[good], zS[good]) - 5) < DIVIDE_MIN
+        }
+      }
+
+      if (!overlapped && !same_name && !drains_in && !not_a_divide) next
+      merges[[length(merges) + 1]] <- list(
+        us = i, bc = j,
+        # rank the evidence, strongest first
+        rank = if (overlapped) 0L else if (same_name) 1L else
+          if (drains_in) 2L else 3L,
+        km = sum(as.numeric(sf::st_length(sf::st_transform(edge_ll, PROJECT_CRS)))))
+    }
+  }
+
+  # Only one US unit may join each BC unit. Without that limit, every US unit
+  # draining into a BC one gets absorbed by it and separate tributaries collapse
+  # together, which grew Sumas River to 205 km², 69% of it American. Keep the
+  # partner with the strongest evidence, and break ties on the longest shared
+  # border.
+  if (length(merges) > 0) {
+    ord <- order(vapply(merges, `[[`, integer(1), "rank"),
+                 -vapply(merges, `[[`, numeric(1), "km"))
+    merges <- merges[ord]
+    seen_bc <- integer(0); pick <- list()
+    for (m in merges) {
+      if (m$bc %in% seen_bc) next
+      seen_bc <- c(seen_bc, m$bc); pick[[length(pick) + 1]] <- m
+    }
+    dropped_n <- length(merges) - length(pick)
+    if (dropped_n > 0)
+      message("  held back ", dropped_n,
+              " further US unit(s) that drain into an already-reunited watershed")
+    merges <- pick
+    keep <- rep(TRUE, nrow(fwa))
+    g <- sf::st_geometry(fwa)
+    for (m in merges) {
+      i <- m$us; j <- m$bc
+      if (!keep[i]) next
+      g[j] <- sf::st_union(g[j], g[i])
+      # many FWA units have no GNIS name, so take the US half's where there is
+      # one rather than falling back to "Upstream area"
+      if (is.na(fwa$GNIS_NAME_1[j]) || !nzchar(fwa$GNIS_NAME_1[j]))
+        fwa$GNIS_NAME_1[j] <- fwa$GNIS_NAME_1[i]
+      # the reunited watershed carries both halves' area and mainstem length
+      fwa$AREA_HA[j] <- fwa$AREA_HA[j] + fwa$AREA_HA[i]
+      bj <- match(fwa$WATERSHED_FEATURE_ID[j], base$id)
+      bi <- match(fwa$WATERSHED_FEATURE_ID[i], base$id)
+      base$area_km2[bj] <- base$area_km2[bj] + base$area_km2[bi]
+      base$reach_km[bj] <- base$reach_km[bj] + base$reach_km[bi]
+      # anything that drained into the US half now drains into the whole
+      base$next_down[base$next_down == base$id[bi]] <- base$id[bj]
+      keep[i] <- FALSE
+    }
+    sf::st_geometry(fwa) <- sf::st_make_valid(g)
+    dropped <- fwa$WATERSHED_FEATURE_ID[!keep]
+    named <- unique(norm_stream(fwa$GNIS_NAME_1[!keep]))
+    fwa <- fwa[keep, ]
+    base <- base[!(base$id %in% dropped), ]
+    N_REUNITED <- length(dropped)
+    message("reunited ", length(dropped),
+            " watershed(s) split by the 49th parallel: ",
+            paste(sort(named), collapse = ", "))
+  }
+}
+
+# ---- 4e. Rehome fragments this script stranded --------------------------------
+# The cutting in 4c and the merging in 4d can leave a watershed holding a piece
+# of ground that no longer touches the rest of it. Fishtrap Creek ended up with
+# a 2 km² parcel 178 m away across Johnson Creek. Fishtrap drains south to the
+# Nooksack and stops there, so that parcel's retention went to a watershed that
+# delivers nothing downstream, while everything around it drains north into the
+# demand area.
+#
+# The rule is deliberately narrow, because watersheds in several pieces are
+# normal here. 41 of the 613 FWA units arrive from the survey that way and must
+# be left alone. Move a piece only when both of these hold.
+#   · It does not touch the part of the watershed that carries the survey's own
+#     shape.
+#   · It does not overlap that shape at all, so it is ground this script
+#     attached rather than ground the FWA put there.
+# The piece then goes to whichever neighbour shares the longest boundary with
+# it. If no neighbour will take it, leave it where it is, so the watersheds
+# still cover the same ground between them.
+rehomed <- 0; rehomed_km2 <- 0
+gcol <- sf::st_geometry(fwa)
+for (i in seq_len(nrow(fwa))) {
+  # Single brackets keep the lookup an sfc with its CRS. `[[` would hand back a
+  # bare sfg and every st_intersection below would refuse it.
+  si <- match(as.character(fwa$WATERSHED_FEATURE_ID[i]), names(fwa_source_geom))
+  if (is.na(si)) next                        # a US unit, no FWA shape to judge
+  src <- fwa_source_geom[si]
+  parts <- suppressWarnings(sf::st_cast(gcol[i], "POLYGON"))
+  if (length(parts) < 2) next
+
+  ov <- vapply(seq_along(parts), function(p) {
+    i2 <- suppressWarnings(sf::st_intersection(parts[p], src))
+    if (length(i2) == 0) 0 else sum(as.numeric(sf::st_area(i2)))
+  }, numeric(1))
+  if (all(ov <= 0)) next                     # nothing anchors it, so leave it
+  anchor <- which.max(ov)
+  loose <- which(ov <= 0 &
+                 lengths(sf::st_intersects(parts, parts[anchor])) == 0)
+  if (!length(loose)) next
+
+  for (p in loose) {
+    frag <- parts[p]
+    # The longest shared boundary wins. st_touches would miss a neighbour that
+    # sits across a hairline gap, so measure the shared boundary directly.
+    cand <- setdiff(which(lengths(sf::st_intersects(gcol, frag)) > 0), i)
+    if (!length(cand)) next
+    shared <- vapply(cand, function(k) {
+      b <- suppressWarnings(sf::st_intersection(sf::st_boundary(gcol[k]),
+                                                sf::st_boundary(frag)))
+      if (length(b) == 0) 0 else sum(as.numeric(sf::st_length(b)))
+    }, numeric(1))
+    if (max(shared) <= 0) next
+    to <- cand[which.max(shared)]
+    frag_km2 <- as.numeric(sf::st_area(frag)) / 1e6
+
+    gcol[i]  <- sf::st_make_valid(sf::st_difference(gcol[i], frag))
+    gcol[to] <- sf::st_make_valid(sf::st_union(gcol[to], frag))
+
+    # move the surveyed area along with the ground, as 4c does, so AREA_HA stays
+    # the figure every later area comes from
+    fwa$AREA_HA[i]  <- max(fwa$AREA_HA[i] - frag_km2 * 100, 0)
+    fwa$AREA_HA[to] <- fwa$AREA_HA[to] + frag_km2 * 100
+    bi <- match(fwa$WATERSHED_FEATURE_ID[i], base$id)
+    bt <- match(fwa$WATERSHED_FEATURE_ID[to], base$id)
+    if (!is.na(bi)) base$area_km2[bi] <- fwa$AREA_HA[i] / 100
+    if (!is.na(bt)) base$area_km2[bt] <- fwa$AREA_HA[to] / 100
+
+    rehomed <- rehomed + 1; rehomed_km2 <- rehomed_km2 + frag_km2
+    message("  · rehomed ", round(frag_km2, 2), " km² from ",
+            fwa$WATERSHED_FEATURE_ID[i], " (",
+            ifelse(is.na(fwa$GNIS_NAME_1[i]), "unnamed", fwa$GNIS_NAME_1[i]),
+            ") to ", fwa$WATERSHED_FEATURE_ID[to], " (",
+            ifelse(is.na(fwa$GNIS_NAME_1[to]), "unnamed", fwa$GNIS_NAME_1[to]),
+            ")")
+  }
+}
+sf::st_geometry(fwa) <- gcol
+message("rehomed ", rehomed, " stranded fragment(s), ",
+        round(rehomed_km2, 2), " km² total")
 
 # ---- 5. Trim to ≤ MAX_FLOW_DIST_KM upstream of the downstream AOI -------------
 # copy NEXT_DOWN and reach length onto the spatial layer
@@ -318,7 +862,8 @@ fwa$reach_km <- base$reach_km[match(fwa$WATERSHED_FEATURE_ID, base$id)]
 # all watershed ids = graph vertices
 all_ids <- base$id
 
-# build directed flow edges: each watershed points to its immediate downstream neighbour, with edge weight equal to the reach length (km)
+# directed flow edges, each watershed to its downstream neighbour, weighted by
+# reach length in km
 edges <- base |>
   dplyr::filter(next_down != 0, next_down %in% all_ids) |>
   dplyr::transmute(from = as.character(id),
@@ -367,57 +912,71 @@ if (any(dangling)) {
 fwa$NEXT_DOWN <- base$next_down[match(fwa$WATERSHED_FEATURE_ID, base$id)]
 
 # ---- 5b. Drop drainage-isolated islands --------------------------------------
-# watershed sharing no boundary with any other = island/sliver
-island <- lengths(sf::st_touches(fwa)) == 0
+# A true island or sliver such as Bowen or Gambier shares no boundary with any
+# other watershed AND has no flow connection into the study area. Shape alone
+# is not enough to tell, because the US units come from a different survey and
+# share no edge with the BC ones even though they do drain in.
+geom_isolated <- lengths(sf::st_touches(fwa)) == 0
+flows_out <- fwa$NEXT_DOWN %in% fwa$WATERSHED_FEATURE_ID   # drains into a kept unit
+flows_in  <- fwa$WATERSHED_FEATURE_ID %in% base$next_down  # a kept unit drains into it
+island <- geom_isolated & !flows_out & !flows_in
 
 if (any(island)) {
   message("dropped ", sum(island), " drainage-isolated island/sliver watershed(s)")
   # drop islands as they do not attenuate any downstream areas
   fwa <- fwa[!island, ]
-  # trim the attribute table to match (nothing routes into an island, so no dangling refs)
+  # trim the attribute table to match. Nothing routes into an island, so this
+  # leaves no references pointing at a watershed that is gone.
   base <- base[base$id %in% fwa$WATERSHED_FEATURE_ID, ]
 }
 
 # ---- 5c. Lake barriers: sever routing through large lakes --------------------
-# Restores the lake-as-sink rule lost in the HydroBASINS -> FWA migration (FWA has
-# no LAKE/ENDO field). Big lakes/reservoirs absorb the inflow flood pulse in their
-# own storage, so upstream attenuation gives ~no marginal benefit downstream: flag
-# each qualifying lake's unit(s) and cut their downstream edge.
+# The FWA has no field marking a lake, so this restores the lake-as-sink rule
+# that HydroBASINS supplied. A big lake or reservoir takes up the storm pulse in
+# its own storage, so holding water back above it buys little downstream. Flag
+# each lake that qualifies and cut its downstream connection.
+#
+# DEFERRED. The runoff held back above a lake should be credited to the LAKE
+# rather than discarded. That needs the lake separated from the watershed land
+# it sits in, and a reservoir's capacity handled differently from a natural
+# lake's overflow. Until then lakes stay terminal, which at least avoids
+# crediting a watershed with retention it does not provide.
 base$is_lake_barrier <- FALSE
 lakes <- tryCatch({
   lakes_all <- bcdc_query_geodata("WHSE_BASEMAPPING.FWA_LAKES_POLY") |>
     filter(INTERSECTS(fwa_buf)) |> collect()
-  # qualifying barriers: large lakes (surface area, ha -> km^2) OR named reservoirs
+  # a lake qualifies on surface area, or by being a named reservoir
   lakes_all[(lakes_all$AREA_HA / 100 >= LAKE_BARRIER_KM2) | (lakes_all$GNIS_NAME_1 %in% RESERVOIR_NAMES), ]
 }, error = function(e) { message("  ! FWA lakes pull skipped: ", conditionMessage(e)); NULL })
 
 if (!is.null(lakes) && nrow(lakes) > 0) {
   # dissolve by lake name so multi-polygon lakes count as one waterbody
-  lakes <- lakes |> 
+  lakes <- lakes |>
     sf::st_transform(PROJECT_CRS) |>
-    dplyr::group_by(GNIS_NAME_1) |> 
+    dplyr::group_by(GNIS_NAME_1) |>
     dplyr::summarise(.groups = "drop") |>
     sf::st_make_valid()
-  
-  unit_polys <- fwa["WATERSHED_FEATURE_ID"]; 
+
+  unit_polys <- fwa["WATERSHED_FEATURE_ID"];
   names(unit_polys)[1] <- "id"
   lake_overlap <- suppressWarnings(sf::st_intersection(unit_polys, lakes))
   lake_overlap$area <- as.numeric(sf::st_area(lake_overlap))
   overlap_tbl <- sf::st_drop_geometry(lake_overlap)
   unit_area <- stats::setNames(as.numeric(sf::st_area(unit_polys)), unit_polys$id)
-  
-  # A unit is a barrier if a qualifying lake (a) covers >= LAKE_COVER_FRAC of it
-  # (lake-dominated unit, handles multi-unit lakes) OR (b) is the unit a NAMED
-  # lake overlaps most (its outlet/core unit — catches small reservoirs sitting
-  # inside a larger mixed unit, e.g. Coquitlam/Alouette/Capilano).
-  
+
+  # A watershed becomes a barrier in either of two ways. A qualifying lake
+  # covers at least LAKE_COVER_FRAC of it, which handles lakes spread across
+  # several watersheds. Or the lake overlaps this watershed more than any other,
+  # which catches small reservoirs sitting inside a larger mixed watershed, such
+  # as Coquitlam, Alouette and Capilano.
+
   covered_ids <- unique(overlap_tbl$id[(overlap_tbl$area / unit_area[as.character(overlap_tbl$id)]) >= LAKE_COVER_FRAC])
   core_ids <- overlap_tbl |>
     dplyr::filter(!is.na(GNIS_NAME_1)) |>
     dplyr::group_by(GNIS_NAME_1) |>
-    dplyr::slice_max(area, n = 1, with_ties = FALSE) |> 
+    dplyr::slice_max(area, n = 1, with_ties = FALSE) |>
     dplyr::pull(id)
-  
+
   base$is_lake_barrier <- base$id %in% unique(c(covered_ids, core_ids))
 }
 
@@ -447,39 +1006,36 @@ fwa$in_downstream_aoi <- as.logical(
   sf::st_intersects(sf::st_centroid(fwa), downstream_aoi, sparse = FALSE)[, 1]
 )
 
-# flag domain outlets (watersheds with no downstream neighbour inside the model)
+# flag the outlets, meaning watersheds with no downstream neighbour in the model
 fwa$is_sink <- fwa$NEXT_DOWN == 0
 
 # tag each watershed by regional district
-if (requireNamespace("bcmaps", quietly = TRUE)) {
+# load regional district polygons and project them to the working CRS
+districts <- bcmaps::regional_districts(ask = FALSE) |>
+  sf::st_transform(PROJECT_CRS)
 
-  # load regional district polygons and project them to the working CRS
-  districts <- bcmaps::regional_districts() |>
-    sf::st_transform(PROJECT_CRS)
+# default label for watersheds outside the three focal districts
+fwa$admin_district <- "Other"
 
-  # default label for watersheds outside the three focal districts
-  fwa$admin_district <- "Other"
+# label watersheds whose centroid falls inside one of the focal districts
+for (district_name in c(
+  "Metro Vancouver Regional District",
+  "Fraser Valley Regional District",
+  "Squamish-Lillooet Regional District"
+)) {
+  poly <- dplyr::filter(districts, ADMIN_AREA_NAME == district_name)
 
-  # label watersheds whose centroid falls inside one of the focal districts
-  for (district_name in c(
-    "Metro Vancouver Regional District",
-    "Fraser Valley Regional District",
-    "Squamish-Lillooet Regional District"
-  )) {
-    poly <- dplyr::filter(districts, ADMIN_AREA_NAME == district_name)
+  if (nrow(poly) == 1) {
+    in_district <- as.logical(
+      sf::st_intersects(sf::st_centroid(fwa), poly, sparse = FALSE)[, 1]
+    )
 
-    if (nrow(poly) == 1) {
-      in_district <- as.logical(
-        sf::st_intersects(sf::st_centroid(fwa), poly, sparse = FALSE)[, 1]
-      )
-
-      # store a shorter district name by removing " Regional District"
-      fwa$admin_district[in_district] <- gsub(" Regional District$", "", district_name)
-    }
+    # store a shorter district name by removing " Regional District"
+    fwa$admin_district[in_district] <- gsub(" Regional District$", "", district_name)
   }
 }
 
-# spliced US providers (no FWA watershed code) are tagged distinctly
+# the US watersheds have no FWA code, so tag them separately
 fwa$admin_district[is.na(fwa$FWA_WATERSHED_CODE)] <- "Whatcom (US)"
 
 # ---- 7. Persist sub-basin layer ----------------------------------------------
@@ -488,6 +1044,24 @@ keep_cols <- c("HYBAS_ID", "NEXT_DOWN", "SUB_AREA", "flow_dist_km", "reach_km",
                "in_downstream_aoi", "is_sink", "is_lake_barrier", "admin_district",
                "WATERSHED_FEATURE_ID", "WATERSHED_ORDER", "WATERSHED_MAGNITUDE",
                "FWA_WATERSHED_CODE", "GNIS_NAME_1")
+
+# Nothing but polygons leaves this script. Every st_make_valid above, in the 4c
+# handover, the 4d merges and the lake severing, can hand back a
+# GEOMETRYCOLLECTION, and that fails quietly further on. exactextractr rejects
+# the whole layer in step 10, and GDAL's RFC7946 writer drops the watershed from
+# the map. Fix it once here, where every path out of the script passes, rather
+# than guarding each step.
+gcol <- sf::st_geometry(fwa)
+gc_i <- which(sf::st_geometry_type(gcol) == "GEOMETRYCOLLECTION")
+for (i in gc_i) {
+  p <- sf::st_collection_extract(gcol[i], "POLYGON", warn = FALSE)
+  gcol[i] <- if (length(p) > 1) sf::st_combine(p) else p
+}
+if (length(gc_i)) {
+  sf::st_geometry(fwa) <- gcol
+  message("normalised ", length(gc_i),
+          " geometry collection(s) to polygons before writing")
+}
 
 # write the final routed sub-basin polygon layer
 sf::st_write(fwa[, intersect(keep_cols, names(fwa))],
@@ -506,7 +1080,8 @@ readr::write_csv(topo, file.path(paths()$processed, "02_topology.csv"))
 # dissolve all kept watersheds, then buffer the edge
 refined <- fwa |>
   sf::st_union() |>
-  # mitre join preserves sharp watershed corners, avoiding the rounded edge cut-offs produced by the default buffer
+  # a mitre join keeps the sharp watershed corners that the default buffer
+  # would round off
   sf::st_buffer(
     EDGE_BUFFER_M,
     joinStyle = "MITRE",
@@ -520,125 +1095,160 @@ sf::st_write(refined, file.path(paths()$processed, "01_aoi_upstream.gpkg"),
              delete_dsn = TRUE, quiet = TRUE)
 
 # ---- QA preview --------------------------------------------------------------
-# Three single-purpose panels:
-#   1. Topology   — the DERIVED NEXT_DOWN edges over a plain basemap; edges should
-#                   form a dendritic tree converging on the terminal units, which
-#                   are classified by colour (demand outlet / domain edge / lake)
-#   2. Flow dist  — network distance down to the admin AOI (drives the step-5 trim)
-#   3. Reach km   — measured main-channel length per unit (step 4b)
-# ---- small helpers shared by the panels --------------------------------------
-# per-feature colours + value range for a continuous fill
-qa_contcol <- function(v, pal) {
-  rng <- range(v, finite = TRUE)
-  idx <- cut(v, seq(rng[1], rng[2], length.out = length(pal) + 1),
-             include.lowest = TRUE, labels = FALSE)
-  list(col = pal[idx], rng = rng)
-}
-# vertical continuous colour bar in its own layout cell
-qa_draw_bar <- function(rng, pal, title) {
-  graphics::par(mar = c(3, 0.4, 4, 3.2))
-  ys <- seq(rng[1], rng[2], length.out = length(pal) + 1)
-  graphics::image(x = c(0, 1), y = ys, z = matrix(seq_along(pal), nrow = 1),
-                  col = pal, axes = FALSE, xlab = "", ylab = "")
-  graphics::axis(4, las = 1, cex.axis = 0.95, lwd = 0, lwd.ticks = 1)
-  graphics::box(); graphics::mtext(title, side = 3, line = 0.6, cex = 0.9, font = 2)
-}
-# draw a filled map panel with the AOI outline on top
-qa_fill_panel <- function(geom, fill, title) {
-  graphics::par(mar = c(2, 1, 4, 1))
-  plot(geom, col = fill, border = "grey85", lwd = 0.1, reset = FALSE, main = title)
-  plot(sf::st_geometry(downstream_aoi), add = TRUE, border = "black", lwd = 1.8)
-}
+# Two checks. The left panel asks whether the routing tree branches like a real
+# river network and converges on the outlets. The right asks whether flow
+# distance falls smoothly toward the demand area, since that field drives the
+# 100 km trim in step 5.
+QA_PAL <- c(bc = "#a6cbe6", bc_dark = "#4f83ad", us = "#e9d08a",
+            us_dark = "#b8891f", ink = "#0f1722", slate = "#5b6b7e",
+            hot = "#df744a", teal = "#2a9d8f", lake = "#2c7fb8")
 
-qa_png("02_subbasins_fwa.png", ncol = 3, panel_w = 1200, panel_h = 1150,
+# Use the coast-clipped demand boundary, and open the frame wide enough to hold
+# both it and the sub-basins. Framed on the sub-basins alone, the boundary's
+# western limb runs off the panel and appears to stop in mid-ocean.
+aoi_disp <- aoi_display()
+qa_view <- span_bbox(fwa, aoi_disp)
+
+qa_png("02_subbasins_fwa.png", ncol = 2, panel_w = 1250, panel_h = 1250,
        plot_fn = function() {
-  geom      <- sf::st_geometry(fwa)
-  flow_pal  <- hcl.colors(100, "Greens", rev = TRUE)
-  reach_pal <- hcl.colors(100, "Blues",  rev = TRUE)
+  op <- graphics::par(mfrow = c(1, 2))
+  on.exit(graphics::par(op), add = TRUE)
 
-  # demand footprint = floodplain ∩ downstream AOI:
-  # shows the demand is the Hope->Salish Sea valley, not the mountainous admin AOI
-  fp_path <- file.path(paths()$processed, "07_floodplain.tif")
-  fp <- NULL
-  if (file.exists(fp_path)) {
-    fp <- terra::aggregate(terra::mask(terra::rast(fp_path),
-                                       terra::vect(downstream_aoi)),
-                           8, fun = "max", na.rm = TRUE)
-    fp[fp == 0] <- NA
-  }
+  # ---- panel 1: routing tree and terminal units ------------------------------
+  # A watershed with no downstream neighbour is a real outlet if it sits inside
+  # the demand area. Outside it, the real downstream was simply trimmed away.
+  is_lake   <- fwa$is_lake_barrier %in% TRUE
+  is_demand <- fwa$is_sink & !is_lake & (fwa$in_downstream_aoi %in% TRUE)
+  is_edge   <- fwa$is_sink & !is_lake & !(fwa$in_downstream_aoi %in% TRUE)
 
-  graphics::layout(matrix(1:5, nrow = 1), widths = c(1, 1, 0.20, 1, 0.20))
+  fwa$terminal <- ifelse(is_demand, "demand outlet",
+                  ifelse(is_edge, "domain-edge sink",
+                  ifelse(is_lake, "lake barrier", "provider")))
 
-  # ---- panel 1 — derived drainage topology + terminal-unit classification ----
-  # Classify every terminal unit (NEXT_DOWN == 0) honestly rather than calling
-  # them all "outlets":
-  #   demand outlet — reaches the floodplain demand area (a true outlet)
-  #   domain edge   — drains OUT of the study area (its real downstream was trimmed)
-  #   lake barrier  — large lake; routing deliberately severed in step 5c
-  is_lake  <- fwa$is_lake_barrier %in% TRUE
-  sink_oth <- fwa$is_sink & !is_lake
-  fp_touch <- rep(FALSE, nrow(fwa))
-  if (!is.null(fp) && any(sink_oth)) {
-    ex <- terra::extract(fp, terra::vect(fwa[sink_oth, ]),
-                         fun = function(x) sum(x > 0, na.rm = TRUE))
-    fp_touch[which(sink_oth)] <- !is.na(ex[, 2]) & ex[, 2] > 0
-  }
-  is_demand <- sink_oth & fp_touch
-  is_edge   <- sink_oth & !fp_touch
+  # terra orders classes alphabetically and ignores factor levels, so the
+  # colours are listed in that order rather than in the order above
+  terra::plot(terra::vect(fwa), "terminal", type = "classes",
+              col = c("demand outlet"    = "#f6c6b0",
+                      "domain-edge sink" = "#f0dca8",
+                      "lake barrier"     = QA_PAL[["bc"]],
+                      "provider"         = "#f2f5f8"),
+              border = "white", lwd = 0.15, axes = TRUE,
+              xlim = qa_view$xlim, ylim = qa_view$ylim,
+              main = "Routing tree and terminal units")
 
-  graphics::par(mar = c(2, 1, 4, 1))
-  plot(geom, col = "grey95", border = "grey80", lwd = 0.1, reset = FALSE,
-       main = "Drainage topology — NEXT_DOWN tree + terminal units")
-  if (!is.null(fp))
-    terra::plot(fp, add = TRUE, col = "#2171b5", alpha = 0.6, legend = FALSE)
-
-  # NEXT_DOWN edges: each unit's centroid -> its downstream neighbour's centroid
-  centroids <- sf::st_coordinates(suppressWarnings(sf::st_centroid(geom)))
+  # routing edges, drawn faintly so the terminal fills stay readable
+  centroids <- sf::st_coordinates(suppressWarnings(
+    sf::st_centroid(sf::st_geometry(fwa))))
   rownames(centroids) <- as.character(fwa$HYBAS_ID)
   edge_df <- data.frame(id = fwa$HYBAS_ID, nd = fwa$NEXT_DOWN)
   edge_df <- edge_df[edge_df$nd != 0 & edge_df$nd %in% fwa$HYBAS_ID, ]
-  x0 <- centroids[as.character(edge_df$id), "X"]; y0 <- centroids[as.character(edge_df$id), "Y"]
-  x1 <- centroids[as.character(edge_df$nd), "X"]; y1 <- centroids[as.character(edge_df$nd), "Y"]
-  graphics::segments(x0, y0, x1, y1, col = "white",  lwd = 1.1)  # halo
-  graphics::segments(x0, y0, x1, y1, col = "grey10", lwd = 0.45) # core
+  graphics::segments(centroids[as.character(edge_df$id), "X"],
+                     centroids[as.character(edge_df$id), "Y"],
+                     centroids[as.character(edge_df$nd), "X"],
+                     centroids[as.character(edge_df$nd), "Y"],
+                     col = "#0f172259", lwd = 0.55)
+  plot(sf::st_geometry(aoi_disp), add = TRUE,
+       border = QA_PAL[["ink"]], lwd = 2)
 
-  # outline each terminal class in its own colour
-  if (any(is_demand))
-    plot(sf::st_geometry(fwa[is_demand, ]), add = TRUE, border = "red", lwd = 1.4)
-  if (any(is_edge))
-    plot(sf::st_geometry(fwa[is_edge, ]), add = TRUE, border = "darkorange", lwd = 1.0)
-  if (any(is_lake))
-    plot(sf::st_geometry(fwa[is_lake, ]), add = TRUE, border = "#08519c", lwd = 2.2)
-  plot(sf::st_geometry(downstream_aoi), add = TRUE, border = "black", lwd = 1.8)
-
-  leg_txt <- c(sprintf("%d demand outlet(s) → floodplain", sum(is_demand)),
-               sprintf("%d domain-edge (drains out of study area)", sum(is_edge)),
-               sprintf("%d lake barrier(s) (routing severed)", sum(is_lake)),
-               "NEXT_DOWN edge", "downstream AOI (admin)")
-  leg_fill <- rep(NA, 5)
-  leg_col  <- c("red", "darkorange", "#08519c", "grey10", "black")
-  leg_lty  <- rep(1, 5); leg_lwd <- c(1.4, 1.0, 2.2, 1, 1.8)
-  if (!is.null(fp)) {  # floodplain swatch only when 07 floodplain exists
-    leg_txt  <- c("floodplain = demand area", leg_txt)
-    leg_fill <- c("#2171b5", leg_fill); leg_col <- c(NA, leg_col)
-    leg_lty  <- c(NA, leg_lty);         leg_lwd <- c(NA, leg_lwd)
-  }
-  graphics::legend("topleft", legend = leg_txt, fill = leg_fill, border = NA,
-                   col = leg_col, lty = leg_lty, lwd = leg_lwd, bty = "n", cex = 0.9)
-
-  # ---- panel 2 — flow distance to the admin AOI (drives the step-5 trim) ------
-  # NOTE: network distance to the *admin* downstream AOI; the benefit model (11)
-  # decays by reach to the floodplain, not by this distance
-  flow_col <- qa_contcol(fwa$flow_dist_km, flow_pal)
-  qa_fill_panel(geom, flow_col$col, "Flow distance to AOI (network km)")
-  qa_draw_bar(flow_col$rng, flow_pal, "flow dist. (km)")
-
-  # ---- panel 3 — measured main-channel reach length (step 4b) -----------------
-  reach_col <- qa_contcol(fwa$reach_km, reach_pal)
-  qa_fill_panel(geom, reach_col$col, "Measured reach length (FWA streams)")
-  qa_draw_bar(reach_col$rng, reach_pal, "reach (km)")
+  # ---- panel 2: flow distance to the demand area -----------------------------
+  terra::plot(terra::vect(fwa), "flow_dist_km", type = "interval",
+              breaks = c(0, 20, 40, 60, 80, 100),
+              col = c("#eef4f9", "#a6cbe6", "#4f83ad", "#1f4e73", "#0f1722"),
+              border = "grey85", lwd = 0.1, axes = TRUE,
+              xlim = qa_view$xlim, ylim = qa_view$ylim,
+              main = "Flow distance to the demand area (km)")
+  plot(sf::st_geometry(aoi_disp), add = TRUE, border = "black", lwd = 2)
 })
 
-message("✓ 02_subbasins_fwa.R — wrote FWA sub-basins + topology + upstream AOI (",
+# ---- QA: border stitching diagnostic ----------------------------------------
+# Checks whether the two national surveys meet cleanly along the 49th parallel.
+# FWA watersheds are blue, US ones amber, and the routing edges carrying water
+# north across the line are orange. A gap between blue and amber means the join
+# failed.
+#
+# Each edge runs from the US watershed's centre to the point where it meets the
+# FWA watershed it drains into, rather than to that watershed's centre. A
+# centre-to-centre line would track over whatever watersheds lie between and
+# read as water crossing ground it never touches. The receiving watersheds are
+# tinted a darker shade to show the pairing instead.
+is_us <- is.na(fwa$FWA_WATERSHED_CODE)
+if (any(is_us)) {
+  qa_png("02_border_stitch.png", panel_w = 1500, panel_h = 1200,
+         plot_fn = function() {
+    centroids <- sf::st_coordinates(suppressWarnings(
+      sf::st_point_on_surface(sf::st_geometry(fwa))))
+    rownames(centroids) <- as.character(fwa$HYBAS_ID)
+    edge_df <- data.frame(id = fwa$HYBAS_ID, nd = fwa$NEXT_DOWN, src_us = is_us)
+    edge_df <- edge_df[edge_df$nd != 0 & edge_df$nd %in% fwa$HYBAS_ID, ]
+    cross <- edge_df[edge_df$src_us &
+                       !is_us[match(edge_df$nd, fwa$HYBAS_ID)], ]
+
+    # Frame on the watersheds taking part in the join. The full US extent runs
+    # south to Bellingham Bay and has nothing to do with the border.
+    join_ids <- unique(c(cross$id, cross$nd))
+    focus <- fwa[fwa$HYBAS_ID %in% join_ids, ]
+    fb <- sf::st_bbox(if (nrow(focus) > 0) focus else fwa[is_us, ])
+    pad <- 0.1 * (fb[["xmax"]] - fb[["xmin"]])
+
+    role <- ifelse(!is_us & fwa$HYBAS_ID %in% cross$nd, "FWA (BC), receiving",
+            ifelse(!is_us, "FWA (BC)",
+            ifelse(fwa$HYBAS_ID %in% cross$id, "WBD (US), draining north",
+                   "WBD (US)")))
+    # Name the colours. terra drops any class nothing falls into and then reads
+    # the colour vector by position, so with no cross-border edge the two
+    # "draining" classes vanish and an unnamed vector would recolour the rest.
+    survey_cols <- c("FWA (BC)"                 = QA_PAL[["bc"]],
+                     "FWA (BC), receiving"      = QA_PAL[["bc_dark"]],
+                     "WBD (US)"                 = QA_PAL[["us"]],
+                     "WBD (US), draining north" = QA_PAL[["us_dark"]])
+    fwa$survey <- factor(role, levels = names(survey_cols))
+    terra::plot(terra::vect(fwa), "survey", type = "classes",
+                col = survey_cols,
+                border = "white", lwd = 0.3, axes = TRUE,
+                mar = c(4.6, 3.1, 3.1, 9.5),
+                main = "Cross-border routing: US units draining into the FWA",
+                xlim = c(fb[["xmin"]] - pad, fb[["xmax"]] + pad),
+                ylim = c(fb[["ymin"]] - pad, fb[["ymax"]] + pad))
+
+    if (nrow(cross) > 0) {
+      # Find where the pair touches. st_nearest_points returns a segment whose
+      # far end sits on the receiving watershed, and two touching shapes give a
+      # zero-length segment on their shared edge. It falls back to the receiving
+      # centre only if the pair is apart, the failure this figure looks for.
+      exit <- t(vapply(seq_len(nrow(cross)), function(k) {
+        a <- sf::st_geometry(fwa)[match(cross$id[k], fwa$HYBAS_ID)]
+        b <- sf::st_geometry(fwa)[match(cross$nd[k], fwa$HYBAS_ID)]
+        p <- suppressWarnings(sf::st_coordinates(sf::st_nearest_points(a, b)))
+        if (nrow(p) >= 2) p[2, c("X", "Y")]
+        else centroids[as.character(cross$nd[k]), c("X", "Y")]
+      }, numeric(2)))
+
+      graphics::segments(centroids[as.character(cross$id), "X"],
+                         centroids[as.character(cross$id), "Y"],
+                         exit[, 1], exit[, 2],
+                         col = QA_PAL[["hot"]], lwd = 2.5)
+      graphics::points(exit[, 1], exit[, 2], pch = 21, cex = 0.9,
+                       col = QA_PAL[["hot"]], bg = "white", lwd = 1.6)
+      graphics::mtext(paste0(nrow(cross), " cross-border edge(s); the arrow ",
+                             "runs to the point where the unit meets its ",
+                             "receiving FWA watershed"),
+                      side = 1, line = 3.2, cex = 0.75,
+                      col = QA_PAL[["slate"]])
+    }
+    # Crop rather than rely on par(xpd). terra keeps the map's aspect ratio, so
+    # the coordinate window is wider than the box it draws, and a boundary
+    # running past the frame gets drawn across the legend. Take the boundary
+    # first and crop that, since cropping the polygon would turn the frame's own
+    # edges into part of the outline.
+    aoi_win <- suppressWarnings(sf::st_crop(
+      sf::st_boundary(sf::st_geometry(aoi_disp)),
+      c(xmin = fb[["xmin"]] - pad, xmax = fb[["xmax"]] + pad,
+        ymin = fb[["ymin"]] - pad, ymax = fb[["ymax"]] + pad)))
+    if (length(aoi_win) > 0)
+      plot(aoi_win, add = TRUE, border = QA_PAL[["ink"]], lwd = 1.5, lty = 2)
+  })
+}
+
+message("✓ 02_subbasins_fwa.R: wrote FWA sub-basins + topology + upstream AOI (",
         nrow(fwa), " assessment watersheds; ", sum(fwa$is_sink), " terminal sinks incl. ",
         sum(fwa$is_lake_barrier %in% TRUE), " lake barriers)")

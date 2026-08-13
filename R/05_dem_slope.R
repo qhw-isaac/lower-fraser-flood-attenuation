@@ -42,7 +42,7 @@ message(sprintf("10° flat-slope fallback (Huang ≈ off): %10d px  (%5.1f%%)",
 
 
 # ---- QA preview --------------------------------------------------------------
-# slope should follow the terrain (i.e. steep in the mountains and flat otherwise)
+# slope should follow the terrain: steep in the mountains, flat elsewhere
 qa_png("05_dem_slope.png", function() {
   terra::plot(slope_deg, col = grDevices::hcl.colors(50, "YlOrRd"),
               range = c(0, 60), axes = TRUE, main = "")

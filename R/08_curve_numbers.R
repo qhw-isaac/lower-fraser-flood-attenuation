@@ -36,7 +36,7 @@ cn_tbl <- readr::read_csv(here::here("lookup", "cn_lookup.csv"),
   dplyr::select(lulc_code, hsg, cn) |>
   dplyr::filter(!is.na(cn))
 
-# stop if duplicated (lulc_code, hsg) pair are identified
+# stop if any (lulc_code, hsg) pair is duplicated
 stopifnot(!anyDuplicated(cn_tbl[, c("lulc_code", "hsg")]))
 
 # barren counterfactual: replace every natural pixel with code 16 (Barren)
@@ -80,12 +80,24 @@ safe_writeRaster(cn_cf_adj, file.path(paths()$processed, "08_cn_counterfactual_s
 qa_png("08_cn_slopeadj.png", ncol = 3, function() {
   op <- graphics::par(mfrow = c(1, 3))
   on.exit(graphics::par(op), add = TRUE)
-  pal <- grDevices::hcl.colors(50, "YlOrBr")
-  terra::plot(cn_baseline_adj, col = pal, range = c(20, 100), axes = TRUE, main = "")
-  terra::plot(cn_cf_adj, col = pal, range = c(20, 100), axes = TRUE, main = "")
-  terra::plot(sqrt(terra::clamp(cn_cf_adj - cn_baseline_adj, lower = 0)),
-              col = grDevices::hcl.colors(50, "Blues", rev = TRUE),
-              axes = TRUE, main = "")
+
+  # curve number is runoff potential, so the ramp runs green where cover soaks a
+  # storm up to grey-red where it sheds it. Both CN panels share one range, or
+  # panel B renormalises to its own narrow spread and the two stop comparing.
+  cn_pal <- grDevices::colorRampPalette(
+    c("#1b5e34", "#4c9a51", "#a3c471", "#e0d08a", "#b98b48",
+      "#8c5a2b", "#7a3b2e", "#6f6f6f"))(60)
+
+  terra::plot(cn_baseline_adj, col = cn_pal, range = c(20, 100), axes = TRUE,
+              main = "A. Curve number, land cover as mapped")
+  terra::plot(cn_cf_adj, col = cn_pal, range = c(20, 100), axes = TRUE,
+              main = "B. Curve number, natural cover replaced by bare ground")
+  # sqrt only to spread the low end; the bar is labelled in CN points
+  gain <- terra::clamp(cn_cf_adj - cn_baseline_adj, lower = 0)
+  brk <- c(0, 5, 10, 15, 20, 25, 30)
+  terra::plot(sqrt(gain), col = grDevices::hcl.colors(50, "Blues", rev = TRUE),
+              axes = TRUE, plg = list(at = sqrt(brk), labels = brk),
+              main = "C. Uplift: B minus A (CN points)")
 })
 
 message("✓ 08_curve_numbers.R: wrote 4 CN rasters ",

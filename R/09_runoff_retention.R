@@ -72,8 +72,14 @@ run_runoff <- function(P_mm, out, label) {
   qa_png(paste0("09_runoff_", basename(out), ".png"), ncol = 2, function() {
     op <- graphics::par(mfrow = c(1, 2))
     on.exit(graphics::par(op), add = TRUE)
-    terra::plot(q_b_mm, col = blues, axes = TRUE, main = "")
-    terra::plot(prr, col = greens, axes = TRUE, main = "")
+    # the two panels are different quantities on different scales, not a
+    # before/after pair, so each is named and carries its own bar
+    terra::plot(q_b_mm, col = blues, axes = TRUE,
+                main = paste0("A. Storm runoff, cover as mapped (mm): ",
+                              label))
+    terra::plot(prr, col = greens, axes = TRUE,
+                main = paste0("B. Runoff held back by natural cover (mm): ",
+                              label))
   })
 
   message("  ✓ runoff '", basename(out), "' written")

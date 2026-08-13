@@ -86,13 +86,29 @@ sf::st_write(sb, file.path(paths()$processed, "11_tda_subbasin.gpkg"),
 
 # ---- QA preview --------------------------------------------------------------
 # routed demand should peak in sub-basins whose flow paths feed dense MVRD/FVRD
-# exposure and fade with distance. 
-qa_png("11_tda_total_w.png", function() {
+# exposure and fade with distance.
+qa_png("11_tda_total_w.png", panel_w = 1300, function() {
+  aoi_disp <- aoi_display()
+  view <- span_bbox(sb, aoi_disp)
+  # the value is not an area on the ground: it is each sub-basin's own exposure
+  # plus everything downstream, each term discounted by travel distance, so a
+  # 20 km² sub-basin can score 12. The legend has to say so. terra ignores
+  # `levels` for type = "interval", so the class names go through plg.
   terra::plot(terra::vect(sb), "tda_total_w", type = "interval",
               breaks = c(0, 0.01, 0.1, 1, 10, Inf),
               col = grDevices::hcl.colors(5, "YlGnBu", rev = TRUE),
-              border = "grey70", lwd = 0.1, axes = TRUE, main = "")
-  plot(sf::st_geometry(read_aoi("downstream")), add = TRUE,
+              border = "grey70", lwd = 0.1, axes = TRUE,
+              xlim = view$xlim, ylim = view$ylim,
+              # a two-line main needs the extra top margin, or terra draws it
+              # off the top edge of the device
+              mar = c(3.1, 3.1, 5.2, 8.5),
+              plg = list(title = "km² reachable\n(distance-decayed)",
+                         legend = c("under 0.01", "0.01 to 0.1", "0.1 to 1",
+                                    "1 to 10", "over 10")),
+              main = paste0("Exposed land reachable from each sub-basin,\n",
+                            "discounted over a ", HALFLIFE_KM,
+                            " km travel half-life"))
+  plot(sf::st_geometry(aoi_disp), add = TRUE,
        border = "black", lwd = 1.4)
 })
 
