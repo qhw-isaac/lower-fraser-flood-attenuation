@@ -20,7 +20,6 @@
 *.knit.md
 vignettes/*.html
 vignettes/*.pdf
-docs/
 
 # pkgdown / Shiny
 rsconnect/
@@ -49,13 +48,14 @@ data/processed/**
 # terra scratch space (spilled intermediate rasters; cleared per session)
 data/tmp/
 
-# figure / table / shapefile outputs (regenerated from scripts)
+# figure / table / shapefile / map outputs (regenerated from scripts)
 output/figures/**
 !output/figures/.gitkeep
 output/tables/**
 !output/tables/.gitkeep
 output/shapefiles/**
 !output/shapefiles/.gitkeep
+output/interactive_map/
 
 # GEE-side downloads sometimes land here
 *.tif
@@ -74,6 +74,3 @@ output/shapefiles/**
 Context/
 technical_report/
 lookup/
-
-# temp hide
-output/interactive_map/README.md
