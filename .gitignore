@@ -76,5 +76,4 @@ technical_report/
 lookup/
 
 # temp hide
-output/interactive_map/
-99_interactive_map.R
+output/interactive_map/README.md
