@@ -48,14 +48,8 @@ data/processed/**
 # terra scratch space (spilled intermediate rasters; cleared per session)
 data/tmp/
 
-# figure / table / shapefile / map outputs (regenerated from scripts)
-output/figures/**
-!output/figures/.gitkeep
-output/tables/**
-!output/tables/.gitkeep
-output/shapefiles/**
-!output/shapefiles/.gitkeep
-output/interactive_map/
+# pipeline outputs (regenerated from scripts; local only)
+output/
 
 # GEE-side downloads sometimes land here
 *.tif
