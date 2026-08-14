@@ -253,6 +253,53 @@ message(
 # length. This step keeps the units that route toward Canada, and step 5 drops
 # anything too far upstream, so south-draining basins fall out on their own.
 
+# Pair a US unit with the FWA watershed it sits under, not the one it nicks.
+# Absolute overlap lets a large downstream unit (Sumas) win a 7 km² tail over
+# the small FWA unit the US catchment actually abuts on 49°N. Prefer the
+# longest shared 49th-parallel edge; if no candidate meets the border, take
+# the FWA unit whose own area is most covered (f_fwa). Used for outlet_fwa
+# (routing) and xb_partner (the 4d merge), which have to agree.
+BORDER_LAT <- 49
+BORDER_TOL_DEG <- 5e-4      # ~55 m
+BORDER_EDGE_MIN_M <- 200    # shorter than this is a corner nick, not a sit-under
+PARTNER_MIN_KM2 <- 0.5      # ignore overlap slivers when choosing a partner
+
+border_edge_m <- function(us_g, fwa_g) {
+  edge <- suppressWarnings(sf::st_intersection(
+    sf::st_boundary(us_g), sf::st_boundary(fwa_g)))
+  if (!length(edge) || all(sf::st_is_empty(edge))) return(0)
+  if (any(sf::st_geometry_type(edge) == "GEOMETRYCOLLECTION"))
+    edge <- sf::st_collection_extract(edge, "LINESTRING", warn = FALSE)
+  edge <- edge[as.character(sf::st_geometry_type(edge)) %in%
+                 c("LINESTRING", "MULTILINESTRING")]
+  if (!length(edge) || all(sf::st_is_empty(edge))) return(0)
+  edge_ll <- sf::st_transform(edge, 4326)
+  band <- sf::st_as_sfc(sf::st_bbox(
+    c(xmin = -180, ymin = BORDER_LAT - BORDER_TOL_DEG,
+      xmax = 180,  ymax = BORDER_LAT + BORDER_TOL_DEG), crs = 4326))
+  on <- suppressWarnings(sf::st_intersection(edge_ll, band))
+  if (!length(on) || all(sf::st_is_empty(on))) return(0)
+  as.numeric(sum(sf::st_length(sf::st_transform(on, PROJECT_CRS))))
+}
+
+# us_g: one US geometry. fwa_sf: candidate FWA polygons. ov_area: overlap m²
+# aligned with fwa_sf rows. Returns a row index into fwa_sf, or NA.
+best_fwa_partner <- function(us_g, fwa_sf, ov_area) {
+  ok <- which(is.finite(ov_area) & ov_area >= PARTNER_MIN_KM2 * 1e6)
+  if (!length(ok)) {
+    ok <- which(is.finite(ov_area) & ov_area > 0)
+    if (!length(ok)) return(NA_integer_)
+  }
+  us_g <- sf::st_geometry(us_g)
+  fwa_g <- sf::st_geometry(fwa_sf)
+  edge_m <- vapply(ok, function(j) border_edge_m(us_g, fwa_g[j]), numeric(1))
+  if (any(edge_m >= BORDER_EDGE_MIN_M))
+    return(ok[which.max(edge_m)])
+  fwa_a <- as.numeric(sf::st_area(fwa_sf))
+  f_fwa <- ov_area[ok] / pmax(fwa_a[ok], 1)
+  ok[which.max(f_fwa)]
+}
+
 # columns carried on the spatial layer (must match the FWA layer's schema below)
 us_cols <- c("WATERSHED_FEATURE_ID", "WATERSHED_ORDER", "WATERSHED_MAGNITUDE",
              "FWA_WATERSHED_CODE", "GNIS_NAME_1", "AREA_HA")
@@ -311,10 +358,11 @@ us <- tryCatch({
   exit_idx <- match(usid[!(to_us %in% usid)], wbd$huc12)   # units leaving the set
   overlaps <- lengths(sf::st_intersects(wbd[exit_idx, ], fwa)) > 0
   outlet_fwa <- list()
+  message("  · pairing border outlets with the FWA unit they sit under ",
+          "(49th-parallel edge, else f_fwa), not largest overlap")
   for (i in exit_idx[overlaps]) {
     hits <- sf::st_intersects(wbd[i, ], fwa)[[1]]
     if (length(hits) == 0) next
-    # among overlapping FWA units, pick the one with the largest overlap area
     cands <- fwa[hits, ]
     ov <- suppressWarnings(sf::st_intersection(
       sf::st_geometry(wbd[i, ]), sf::st_geometry(cands)))
@@ -322,9 +370,22 @@ us <- tryCatch({
       if (sf::st_is_empty(g)) return(0)
       as.numeric(sf::st_area(g))
     }, numeric(1))
-    best <- which.max(ov_area)
-    if (length(best) == 1 && ov_area[best] > 0)
+    best <- best_fwa_partner(sf::st_geometry(wbd)[i], cands, ov_area)
+    if (!is.na(best) && ov_area[best] > 0) {
       outlet_fwa[[wbd$huc12[i]]] <- cands$WATERSHED_FEATURE_ID[best]
+      area_best <- which.max(ov_area)
+      fwa_lab <- function(j) {
+        nm <- cands$GNIS_NAME_1[j]
+        if (is.na(nm) || !nzchar(nm)) paste0("#", cands$WATERSHED_FEATURE_ID[j])
+        else nm
+      }
+      message(sprintf("      %-36s -> %-20s%s",
+                      substr(wbd$name[i], 1, 36),
+                      substr(fwa_lab(best), 1, 20),
+                      if (!is.na(area_best) && area_best != best)
+                        paste0("  (was ", fwa_lab(area_best), " by area)")
+                      else ""))
+    }
   }
   # provider set = the outlets plus everything upstream of them in the US graph
   eh <- data.frame(from = usid, to = to_us)
@@ -378,9 +439,9 @@ us <- tryCatch({
             " FWA stream segment(s) over the contested border zone")
 
     # Record which FWA watershed this US unit is the other half of, while the
-    # US shape still holds its Canadian portion. The FWA watershed it
-    # covers most is the one both surveys drew over the same ground. This test
-    # needs no stream name, routing or terrain, so unnamed units work too.
+    # US shape still holds its Canadian portion. Sit-under pairing (same rule
+    # as outlet_fwa), not largest overlap: a 7 km² tail inside Sumas is not
+    # the other half of Sumas. Unnamed FWA units still work.
     hits <- sf::st_intersects(wbd_us, fwa_near)
     xb_partner <- rep(NA_real_, nrow(wbd_us)); xb_frac <- rep(0, nrow(wbd_us))
     lobe_geom <- vector("list", nrow(wbd_us))   # ground each US unit keeps
@@ -392,8 +453,10 @@ us <- tryCatch({
       a <- vapply(gi, function(g)
         if (!length(g)) 0 else sum(as.numeric(sf::st_area(g))), numeric(1))
       if (!length(a) || max(a) <= 0) next
-      xb_partner[k] <- fwa_near$WATERSHED_FEATURE_ID[h[which.max(a)]]
-      xb_frac[k] <- max(a) / (before_km2[k] * 1e6)
+      best <- best_fwa_partner(sf::st_geometry(wbd_us)[k], fwa_near[h, ], a)
+      if (is.na(best)) next
+      xb_partner[k] <- fwa_near$WATERSHED_FEATURE_ID[h[best]]
+      xb_frac[k] <- a[best] / (before_km2[k] * 1e6)
 
       # apply the named-stream rule described above. For each overlap, check the
       # size floor and LOBE_FWA_MAX first, then look for a named FWA stream.
@@ -631,8 +694,6 @@ if (!is.null(us) && nrow(us$attr) > 0) {
 # Upper/Lower/Headwater prefixes and the Creek/River suffix, and uses an alias
 # table for the streams the two countries spell differently. Names then have to
 # match exactly.
-BORDER_LAT <- 49
-BORDER_TOL_DEG <- 5e-4      # ~55 m
 BORDER_SHARE_MIN <- 0.9
 DIVIDE_MIN <- 0.5           # below this share of ridge, the edge is no divide
 XB_FRAC_MIN <- 0.15         # share of a US unit that lay inside one FWA unit
@@ -853,6 +914,87 @@ for (i in seq_len(nrow(fwa))) {
 sf::st_geometry(fwa) <- gcol
 message("rehomed ", rehomed, " stranded fragment(s), ",
         round(rehomed_km2, 2), " km² total")
+
+# ---- 4f. Repair NEXT_DOWN where the splice broke adjacency -------------------
+# Step 4 picks the downstream neighbour from the uncut FWA shapes. 4c–4e then
+# cut and merge along the 49th parallel, so a unit can still point at an outlet
+# it no longer touches. Unnamed 8172 is a Sumas tributary in the FWA address
+# but sits against Johnson Creek; the map drew a hop over the land in between.
+# Point any such unit at a neighbour that still reaches that same outlet.
+ws_lab <- function(id) {
+  i <- match(id, fwa$WATERSHED_FEATURE_ID)
+  if (is.na(i)) return(as.character(id))
+  nm <- fwa$GNIS_NAME_1[i]
+  if (is.na(nm) || !nzchar(nm)) paste0("#", id) else nm
+}
+reaches <- function(start, target, nd, ids) {
+  seen <- integer(0)
+  x <- start
+  for (step in seq_len(length(ids) + 1L)) {
+    if (is.na(x) || identical(x, 0) || identical(x, 0L)) return(FALSE)
+    if (identical(x, target)) return(TRUE)
+    if (x %in% seen) return(FALSE)
+    seen <- c(seen, x)
+    j <- match(x, ids)
+    if (is.na(j)) return(FALSE)
+    x <- nd[j]
+  }
+  FALSE
+}
+contact_score <- function(a, b) {
+  xi <- suppressWarnings(sf::st_intersection(a, b))
+  area <- if (!length(xi) || all(sf::st_is_empty(xi))) 0
+    else sum(as.numeric(sf::st_area(xi)))
+  be <- suppressWarnings(sf::st_intersection(sf::st_boundary(a),
+                                            sf::st_boundary(b)))
+  if (length(be) && any(sf::st_geometry_type(be) == "GEOMETRYCOLLECTION"))
+    be <- sf::st_collection_extract(be, "LINESTRING", warn = FALSE)
+  len <- if (!length(be) || all(sf::st_is_empty(be))) 0
+    else sum(as.numeric(sf::st_length(be)))
+  c(area = area, len = len)
+}
+
+ids <- base$id
+nd <- base$next_down
+g <- sf::st_geometry(fwa)
+gi <- match(ids, fwa$WATERSHED_FEATURE_ID)
+OVERLAP_M2 <- 1e3
+rerouted <- 0L
+for (k in which(!is.na(nd) & nd != 0)) {
+  i <- gi[k]
+  j <- gi[match(nd[k], ids)]
+  if (is.na(i) || is.na(j)) next
+  if (lengths(sf::st_intersects(g[i], g[j])) > 0) next
+
+  hits <- setdiff(sf::st_intersects(g[i], g)[[1]], i)
+  if (!length(hits)) next
+  sc <- vapply(hits, function(o) contact_score(g[i], g[o]), numeric(2))
+  keep <- sc["area", ] > 0 | sc["len", ] > 0
+  hits <- hits[keep]
+  sc <- sc[, keep, drop = FALSE]
+  if (!length(hits)) next
+
+  hit_ids <- fwa$WATERSHED_FEATURE_ID[hits]
+  ok <- vapply(hit_ids, function(oid)
+    identical(oid, nd[k]) || reaches(oid, nd[k], nd, ids), logical(1))
+  hits <- hits[ok]
+  sc <- sc[, ok, drop = FALSE]
+  if (!length(hits)) next
+
+  pick <- if (any(sc["area", ] > OVERLAP_M2))
+    hits[which.max(sc["area", ])] else hits[which.max(sc["len", ])]
+  new_nd <- fwa$WATERSHED_FEATURE_ID[pick]
+  if (identical(new_nd, nd[k])) next
+  if (reaches(new_nd, ids[k], nd, ids)) next
+
+  message("  · rerouted ", ws_lab(ids[k]), " (", ids[k], ") ",
+          ws_lab(nd[k]), " -> ", ws_lab(new_nd), " (", new_nd, ")")
+  nd[k] <- new_nd
+  rerouted <- rerouted + 1L
+}
+base$next_down <- nd
+message("rerouted ", rerouted,
+        " watershed(s) whose downstream neighbour no longer adjoins them")
 
 # ---- 5. Trim to ≤ MAX_FLOW_DIST_KM upstream of the downstream AOI -------------
 # copy NEXT_DOWN and reach length onto the spatial layer

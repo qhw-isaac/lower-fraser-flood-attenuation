@@ -478,6 +478,14 @@ sb_out <- sb_web |>
       !is_lake_barrier ~ NA_character_,
       sub(" .*", "", ws_name) %in% sub(" .*", "", RESERVOIR_NAMES) ~ "Reservoir",
       TRUE ~ "Lake"),
+    # FWA 970- is the Nooksack / Puget Sound drainage. Water from these units
+    # (Fishtrap, Wiser Lake, …) runs south into Washington, not to the Fraser.
+    drains_south = {
+      code <- if ("FWA_WATERSHED_CODE" %in% names(sb))
+        dplyr::coalesce(as.character(sb$FWA_WATERSHED_CODE), "") else ""
+      startsWith(code, "970") |
+        grepl("Nooksack", dplyr::coalesce(ws_name, ""), ignore.case = TRUE)
+    },
     cx, cy
   )
 
