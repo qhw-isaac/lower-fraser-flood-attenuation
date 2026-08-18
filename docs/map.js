@@ -1,0 +1,2138 @@
+/* ============================================================================
+   Indexes
+============================================================================ */
+// One lens per thing a reader can click: a downstream community, an upstream
+// area, or the two sides of the ledger. Tab order runs community, ecosystems,
+// supply & demand, and each landing panel hands the reader to the next.
+// "compare" is an internal mode, reached from the Community tab once a second
+// community is added.
+const TABS={ city:"Community", subbasin:"Upstream Ecosystems", ledger:"Supply & Demand" };
+let mode="city", selCity=null, cityA=null, cityB=null;
+// What the Upstream ecosystems lens shades by. All three are properties of the same
+// clickable area, so they are one control on one lens rather than three tabs:
+//   volume   = runoff the area retains
+//   count    = how many communities its retention reaches (the shared assets)
+//   distance = flow distance to the nearest community it serves
+let subBy="volume";
+// Optional filter on the counterfactual reading: dim the 215 watersheds whose
+// water reaches no focus community, so a reader can see which losses would
+// carry downstream. Off by default. It is offered on that reading alone. The
+// retention reading is the statement of what these ecosystems do, and it shades
+// every watershed the model covers, whoever is or is not downstream.
+let focusOnly=false;
+// The two sides of one ledger, driven by one set of exposure weights: DEMAND
+// shades the communities carrying the exposure, SUPPLY shades the upstream
+// areas whose retention reaches it.
+let ledgerView="supply";   // the tab opens on supply, matching its name
+// the ledger holds its own selection, so a click there does not change tab:
+// {t:"muni"|"da"|"area", id}
+let ledgerSel=null;
+let cmpCity=null;        // optional 2nd community for in-tab comparison (drives compare mode)
+let cmpOpen=false;       // whether the "compare a 2nd community" row is revealed
+let selSub=null;         // clicked upstream area, shown in the Upstream ecosystems pane
+let hoveredId=null;      // area currently outlined by hover (single source of truth)
+let hoveredDa=null;      // same, for the neighbourhood read's own hover outline
+let streamLayers=[];     // {layer, ord} for the real stream lines, restyled on zoom
+let flowChain=[];        // ordered downstream sub-basins glowing from a clicked area
+let flowChainSet=new Set();
+// Active precipitation scenario. Per-area retained runoff for every scenario
+// ships in RETAIN (see R/99_interactive_map.R); switching recomputes all
+// retention-derived state via computeRetention().
+let activeScen = (typeof META!=="undefined"&&META.scenario)||"wettest_month";
+const SCEN_LIST = (typeof META!=="undefined"&&META.scenarios)||[{id:activeScen,label:activeScen}];
+const SCEN_LABELS = (typeof META!=="undefined"&&META.scenario_labels)||{};
+const scenLabel = s => SCEN_LABELS[s] || ((s+"").replace(/_/g," "));
+let SCEN_LABEL = scenLabel(activeScen);
+
+const featById={}, subById={}, muniLabel={}, muniLyr={}, daLyr={};
+SUBBASINS.features.forEach(f=>{ featById[f.properties.id]=f.properties; });
+// inverse drainage adjacency: which sub-basins flow INTO each one (upstream walks)
+const upOf={};
+SUBBASINS.features.forEach(f=>{ const p=f.properties;
+  if(p.next_id&&featById[p.next_id]){ (upOf[p.next_id]=upOf[p.next_id]||[]).push(p.id); } });
+let providersOfMuni={};   // filled below, from distance-decayed delivery
+const muniName=m=>MUNI_NAMES[m]||("Community "+m);
+
+/* ============================================================================
+   Distance-decayed delivery + cross-jurisdiction dependency
+   ----------------------------------------------------------------------------
+   An upstream area's contribution to a community decays with flow distance: as
+   the attenuated peak travels downstream, joining tributaries progressively
+   dominate the hydrograph, so a fixed upstream retention is a smaller share of
+   the flow arriving far away. The contribution halves every DECAY_HALFLIFE_KM
+   of network distance (along the drainage graph, not straight line), matching
+   the decay in R/11_routing_decay.R.
+============================================================================ */
+const DECAY_HALFLIFE_KM=20;
+// haversine distance (km) between two lat/lon points
+function haverKm(lat1,lon1,lat2,lon2){ const R=6371,r=Math.PI/180;
+  const dLat=(lat2-lat1)*r,dLon=(lon2-lon1)*r,la=lat1*r,lb=lat2*r;
+  const h=Math.sin(dLat/2)**2+Math.cos(la)*Math.cos(lb)*Math.sin(dLon/2)**2;
+  return 2*R*Math.asin(Math.sqrt(h)); }
+function segKm(a,b){ const A=featById[a],B=featById[b];
+  return haverKm(A.cy,A.cx,B.cy,B.cx); }
+// flow distance from every upstream sub-basin DOWN to a community, found by
+// walking UP the network from that community's demand basins (shortest path).
+// Each demand basin seeds with its straight-line distance to the municipality's
+// centroid ("last mile") so adjacent communities sharing the same demand basin
+// get distinguishable distances instead of an identical zero.
+const muniCentroid={}, muniMeta={};
+MUNIS.features.forEach(f=>{ const p=f.properties; muniCentroid[p.muni_id]={cy:p.cy,cx:p.cx};
+  muniMeta[p.muni_id]={rd:p.rd,type:p.member_type,cls:p.member_class}; });
+// short "Metro Vancouver · City" style descriptor for a member
+const muniTag=m=>{ const x=muniMeta[m]; if(!x) return "";
+  const rd=x.rd==="MVRD"?"Metro Vancouver":x.rd==="FVRD"?"Fraser Valley":x.rd;
+  return `${rd} · ${x.type||x.cls||""}`; };
+// How many disjoint pieces each member is drawn as.
+const muniParts={};
+MUNIS.features.forEach(f=>{ const g=f.geometry;
+  muniParts[f.properties.muni_id]= !g ? 0 : g.type==="MultiPolygon" ? g.coordinates.length : 1; });
+// Administrative boundaries follow jurisdiction, not drainage. A member is
+// credited with the watersheds upstream of every demand basin its boundary
+// enters, so one detached piece sitting in a main-stem basin brings that whole
+// upstream network with it and the member's upstream total reads far larger
+// than the ground it mostly occupies. Shown only where that is what happened:
+// the member is drawn in pieces, and one basin carries most of its total.
+function boundaryNote(m){
+  if((muniParts[m]||1)<2) return "";
+  const tot=(providersOfMuni[m]||[]).length;
+  const lead=(MUNI_BASINS[m]||[]).map(b=>featById[b]).filter(Boolean)
+    .sort((a,b)=>(b.n_up||0)-(a.n_up||0))[0];
+  if(!tot||!lead||(lead.n_up||0)<0.6*tot) return "";
+  return `<p class="tip"><b>${muniName(m)}</b> is drawn as ${muniParts[m]} separate pieces, and one of them sits in the ${lead.name||"main stem"} watershed. The ${lead.n_up} watersheds upstream of that reach are all counted as contributing here, out of ${tot} in total. Administrative boundaries follow jurisdiction rather than drainage, so a small detached piece carries the whole network above it.</p>`;
+}
+function flowDistTo(muniId){
+  const dist={}, seeds=(MUNI_BASINS[muniId]||[]).filter(id=>featById[id]);
+  const mc=muniCentroid[muniId]||{cy:0,cx:0};
+  let frontier=seeds.map(id=>{
+    const bp=featById[id];
+    dist[id]=bp?haverKm(bp.cy,bp.cx,mc.cy,mc.cx):0;
+    return id; });
+  while(frontier.length){ const nx=[];
+    frontier.forEach(id=>{ (upOf[id]||[]).forEach(u=>{ const nd=dist[id]+(featById[u].reach_km||segKm(u,id));
+      if(dist[u]===undefined||nd<dist[u]-1e-6){ dist[u]=nd; nx.push(u); } }); });
+    frontier=nx; }
+  return dist;
+}
+// Flow distance is geometry-only (scenario-independent), so distTo is computed
+// once; the retained-runoff-weighted delivery + portfolios are (re)computed for
+// the active scenario by computeRetention() and refreshed whenever it changes.
+const distTo={};
+MUNIS.features.forEach(f=>{ const m=f.properties.muni_id; distTo[m]=flowDistTo(m); });
+
+// deliver[m][j] = area j's retained runoff, decayed to community m.
+// MAX_MM is declared here rather than beside depthColor(): computeRetention()
+// runs before the colour section, and reading a `let` early is a TDZ error.
+let deliver={}, provVol={}, sharedVol={}, provList={}, MAX_VOL=1, MAX_MM=1, MAX_GAIN=100;
+function deliverTo(m,j){ return (deliver[m]&&deliver[m][j])||0; }
+
+/* Decay-weighted contribution portfolios + their overlap.
+     provVol[m]      = total attenuation DELIVERED to m
+     sharedVol(a,b)  = jointly-delivered attenuation (min of the two deliveries)
+     similarity(a,b) = Jaccard overlap (symmetric) → "shares most with"
+     dependency(a,b) = share of a's delivered contribution also reaching b (directional)
+   Dependency saturates at 100% where one community's whole portfolio sits
+   inside a neighbour's, so similarity uses Jaccard instead and dependency is
+   kept for "most dependent". */
+function sharedVolOf(a,b){ if(a===b) return provVol[a]||0; return sharedVol[a<b?a+"|"+b:b+"|"+a]||0; }
+function dependency(a,b){ const t=provVol[a]||0; return t>0? sharedVolOf(a,b)/t : 0; }
+function similarity(a,b){ const s=sharedVolOf(a,b),u=(provVol[a]||0)+(provVol[b]||0)-s; return u>0? s/u : 0; }
+
+// Recompute everything that depends on per-area retained runoff for the active
+// scenario: colour-scale max, decayed delivery, provider portfolios and overlaps.
+function computeRetention(){
+  MAX_VOL=Math.max(1,...SUBBASINS.features.map(f=>f.properties.retain_m3||0));
+  MAX_MM=Math.max(1,...SUBBASINS.features.map(f=>f.properties.retain_mm||0));
+  // Counterfactual scale clamps at the 95th percentile: the gain runs 1% to
+  // 673% with a median of 39, so scaling to the maximum would leave nine
+  // watersheds in ten indistinguishable. Above the clamp, all take the darkest
+  // shade, as the legend says.
+  const gains=SUBBASINS.features.map(f=>f.properties.runoff_gain_pct||0).sort((a,b)=>a-b);
+  MAX_GAIN=Math.max(10,Math.round(gains[Math.floor(0.95*(gains.length-1))]));
+  deliver={}; provVol={}; sharedVol={}; provList={}; providersOfMuni={};
+  MUNIS.features.forEach(f=>{ const m=f.properties.muni_id, dd=distTo[m], dv={};
+    Object.keys(dd).forEach(j=>{ const p=featById[j];
+      if(p&&p.natural_km2>0&&p.retain_m3>0) dv[j]=p.retain_m3*Math.pow(0.5,dd[j]/DECAY_HALFLIFE_KM); });
+    deliver[m]=dv; });
+  MUNIS.features.forEach(f=>{ const m=f.properties.muni_id; let v=0; const ids=[];
+    Object.keys(deliver[m]).forEach(j=>{ v+=deliver[m][j]; ids.push(j);
+      (provList[j]=provList[j]||[]).push([m,deliver[m][j]]); });
+    provVol[m]=v; providersOfMuni[m]=ids; });
+  Object.values(provList).forEach(list=>{ for(let i=0;i<list.length;i++) for(let k=i+1;k<list.length;k++){
+    const w=Math.min(list[i][1],list[k][1]), a=list[i][0], b=list[k][0];
+    const key=a<b?a+"|"+b:b+"|"+a; sharedVol[key]=(sharedVol[key]||0)+w; } });
+}
+computeRetention();
+
+/* ============================================================================
+   Demand mix: what counts as being at risk downstream
+   ----------------------------------------------------------------------------
+   The model's demand is exposed land in the floodplain: built-up area plus
+   cropland. Critical facilities (schools, hospitals) are located by 10_demand.R
+   but excluded from it, which assets count being a policy decision the model
+   does not make. DEMAND ships the components separately, so a reader can
+   re-weight them here without that choice entering the committed results.
+
+   DEMAND_W holds the weights as multipliers. The defaults reproduce the model:
+   land at 1, facilities at 0.
+
+   Re-weighting changes how much each community counts, not which areas drain to
+   it: every basin carrying facility demand also carries land demand, so no
+   slider setting adds or removes a demand basin, and flow distances stay fixed.
+============================================================================ */
+const DEMAND_PARTS=[
+  {k:"built", label:"Built-up land",       def:1},
+  {k:"crops", label:"Cropland",            def:1},
+  {k:"fac",   label:"Critical facilities", def:0},
+  {k:"pop",   label:"Population",          def:0}];
+const DEMAND_W={}; DEMAND_PARTS.forEach(p=>DEMAND_W[p.k]=p.def);
+/* Population is a demonstration control, further outside the model than the
+   facilities slider. Exposure is land area throughout the pipeline and the
+   per-basin demand carries no population, so the term is applied where
+   population exists: communities and the neighbourhoods inside them. From there
+   it reaches both sides of the ledger, through muniDemandView and daDemand. It
+   never touches the routed per-basin demand (DEMAND stays area-only, so no
+   basin enters or leaves a provider set and no flow distance moves) or any km²
+   figure (muniArea, daArea).
+   One resident is worth POP_SCALE km², set so that at 1.0x the region's exposed
+   population weighs the same as its exposed built-up land. A display
+   convention, not a rate. Default 0, so the map as shipped is the model. */
+const AREA_PARTS=DEMAND_PARTS.filter(p=>p.k!=="pop");
+// set once from the DA table, which is declared further down (hasDaData)
+let POP_TOTAL=0, POP_SCALE=0;
+function popTerm(pop){ return DEMAND_W.pop*POP_SCALE*(pop||0); }
+/* Exposed population, not the neighbourhood's whole count. Dissemination areas
+   are drawn to hold similar numbers of people (p25 426, median 588, p75 923
+   here), so total residents adds a near-constant term to every neighbourhood.
+   pop_x is that count apportioned by the share of the neighbourhood lying in
+   the floodplain, computed in R so it is the same 34,581 people
+   13_population.R reports. It spreads far wider than the raw counts, which is
+   the difference between a slider that does something and one that does not. */
+function popExposed(d){ return (d&&d.pop_x)||0; }
+// DEMAND still ships as the per-basin table the member figures are apportioned
+// from, but the ledger reads MUNI_DEMAND, so that is what has to be present.
+const hasMuniDemand = typeof MUNI_DEMAND!=="undefined" && Object.keys(MUNI_DEMAND).length>0;
+// exposure a member holds, as measured inside its own boundary (MUNI_DEMAND).
+// NOT the sum of the demand basins it touches: a member clipping the corner of
+// a valley-floor watershed would take that whole watershed's exposure with it,
+// which overstated the region by 3.9x and ranked electoral areas at the top.
+// MUNI_BASINS still says WHERE a member's risk sits, for the drainage lines.
+function muniPart(m,k){ const d=hasMuniDemand?MUNI_DEMAND[m]:null; return d?(d[k]||0):0; }
+
+/* Two quantities, kept apart.
+
+   muniDemand / daDemand are the weighted scores the sliders drive: an index,
+   not an area, so they drive ranking, bar lengths and shading only. Never
+   printed with a km² label, which would show the region's exposure growing as
+   a slider moves.
+
+   muniArea / daArea are the exposed land itself: built-up plus cropland inside
+   the floodplain, unweighted and fixed. Facilities are excluded, their
+   km²-equivalent being a policy weight rather than a footprint. Every km²
+   figure the panel prints comes from here. */
+function daArea(id){
+  const d=hasDaData?DA_DEMAND[id]:null; if(!d) return 0;
+  return (d.built||0)+(d.crops||0);
+}
+// The demand side uses a warm ramp, not the greens: green is retention (what
+// the land supplies), amber-red is exposure (what is at risk downstream), so
+// the two halves of the ledger never read as the same quantity.
+const REDS=[[254,237,222],[253,208,162],[253,174,107],[230,110,58],[166,54,3]];
+// t in [0,1] along the warm ramp
+function warmColor(t){
+  const s=Math.max(0,Math.min(1,t))*(REDS.length-1),i=Math.min(Math.floor(s),REDS.length-2);
+  return mix(REDS[i],REDS[i+1],s-i);
+}
+/* ONE scale for both exposure reads, so switching between them changes the
+   grain and nothing else. Each read used to renormalise on its own set: the
+   community ramp ran as a square root of the largest community, the
+   neighbourhood ramp as a log between the 10th and 95th percentile of the
+   neighbourhoods, clamping the top 5%. The same ground therefore changed shade
+   on a switch that promises a closer look. The rural electoral areas showed it
+   worst: Fraser Valley F sat at 0.39 of the community ramp and its largest
+   neighbourhood, holding less land, clamped to the darkest shade.
+   Log, because the values span four decades from a city block of floodplain to
+   a whole rural section, and a linear or square-root ramp buries the small end.
+   The floor is the 10th percentile of the neighbourhoods, the finer unit, and
+   the ceiling is the largest unit in either read, so nothing clamps. */
+let EXP_LO=1e-3, EXP_HI=1, EXP_SET=false;
+function exposureColor(v){
+  if(!v||v<=0) return "#e8edf2";
+  const t=Math.log(Math.max(v,EXP_LO)/EXP_LO)/Math.log(EXP_HI/EXP_LO);
+  return warmColor(t);
+}
+const demandColor=exposureColor, daColor=exposureColor;
+/* Reading exposure below the community level.
+   ----------------------------------------------------------------------------
+   The community stays the unit the model is read against: ranking, selection
+   and routing are all per community. But shading a whole community by its total
+   exposure hides which part of it is exposed.
+
+   DAS / DA_DEMAND carry the same demand split over 2021 census dissemination
+   areas (400-700 people), with the same components, so the sliders apply to a
+   DA exactly as they do to a community. Only DAs carrying exposure ship, so a
+   community's unexposed ground stays unshaded.
+
+   A finer view, not a finer model: DA figures do not add to the community
+   figures, which count a shared floodplain once for each community it puts at
+   risk. A build without DAs falls back to community shading. */
+const hasDaData = typeof DAS!=="undefined" && DAS.features && DAS.features.length
+  && typeof DA_DEMAND!=="undefined";
+// The demand side is read at neighbourhood level only. A community is the unit
+// the model routes to, and it keeps the whole Community tab, but shading a
+// municipality by its total exposure implies the risk is spread evenly across
+// it, which is exactly what a floodplain is not. The supply side is read on
+// watersheds for the same reason: neither half of the ledger is drawn on an
+// administrative unit. A build without the DA table falls back to community
+// shading, since some picture beats none.
+function daExposure(id){
+  const d=hasDaData?DA_DEMAND[id]:null; if(!d) return 0;
+  return AREA_PARTS.reduce((s,p)=>s+DEMAND_W[p.k]*(d[p.k]||0),0)+popTerm(popExposed(d));
+}
+// Exposure of a community = its own demand basins under the current weights.
+// muniDemand is the model's figure, area only; muniDemandView adds the
+// population demonstration. Both sides of the ledger read the view value, so
+// they agree at every slider setting, and are identical at the default 0.
+let muniDemand={}, muniDemandView={}, muniPop={},
+    muniArea={}, daDemand={}, daByMuni={}, regionScore={}, MAX_SCORE=1;
+let REGION_AREA=0;   // real km² of exposed land, never slider-driven
+
+function computeDemand(){
+  // population totals, once: the scale that makes 1.0x mean "people weigh as
+  // much as buildings" across the whole region
+  if(hasMuniDemand && !POP_SCALE){
+    POP_TOTAL=Object.values(MUNI_DEMAND).reduce((s,d)=>s+(d.pop||0),0);
+    const built=Object.values(MUNI_DEMAND).reduce((s,d)=>s+(d.built||0),0);
+    POP_SCALE=POP_TOTAL>0?built/POP_TOTAL:0;
+    muniPop={}; MUNIS.features.forEach(f=>{ const m=f.properties.muni_id;
+      muniPop[m]=muniPart(m,"pop"); });
+  }
+  muniDemand={}; muniDemandView={}; muniArea={};
+  MUNIS.features.forEach(f=>{ const m=f.properties.muni_id;
+    muniDemand[m]=AREA_PARTS.reduce((s,p)=>s+DEMAND_W[p.k]*muniPart(m,p.k),0);
+    muniDemandView[m]=muniDemand[m]+popTerm(muniPop[m]||0);
+    muniArea[m]=muniPart(m,"built")+muniPart(m,"crops"); });
+  // the members partition the region's exposure, so this is both the regional
+  // total and the sum of the parts the panel lists
+  REGION_AREA=Object.values(muniArea).reduce((s,v)=>s+v,0);
+  daDemand={}; daByMuni={};
+  if(hasDaData){
+    Object.keys(DA_DEMAND).forEach(id=>{ daDemand[id]=daExposure(id);
+      const m=DA_DEMAND[id].muni; (daByMuni[m]=daByMuni[m]||[]).push(id); });
+  }
+  // The scale is fixed at the model's own weighting, ONCE, and never moves with
+  // the sliders. Rebuilding it per weighting made the map read backwards:
+  // population is concentrated in the small urban neighbourhoods, so raising
+  // that weight lifted the floor of the scale far faster than its ceiling, and
+  // the whole map went lighter as the weight went up. A weight now moves the
+  // values against a fixed scale, which is the only way the change is legible.
+  // Values past the top clamp to the darkest shade.
+  if(!EXP_SET){
+    const dv=Object.values(daDemand).filter(x=>x>0).sort((a,b)=>a-b);
+    EXP_LO=dv.length?Math.max(1e-4,dv[Math.floor(dv.length*0.10)]):1e-3;
+    EXP_HI=Math.max(dv.length?dv[dv.length-1]:0,
+                    hasDaData?0:Math.max(...Object.values(muniDemandView)), EXP_LO*10);
+    EXP_SET=true;
+  }
+  // An upstream area's regional score = the retention it delivers to each
+  // community, weighted by that community's exposure. This is the map's read of
+  // the model's realised benefit: provision x demand. The weight is the VIEW
+  // value, so the population demonstration re-ranks upstream areas too.
+  regionScore={};
+  Object.keys(deliver).forEach(m=>{ const w=muniDemandView[m]||0; if(w<=0) return;
+    Object.keys(deliver[m]).forEach(j=>{ regionScore[j]=(regionScore[j]||0)+deliver[m][j]*w; }); });
+  MAX_SCORE=Math.max(1,...Object.values(regionScore));
+}
+computeDemand();
+// share of total exposure each part currently contributes (for the slider panel)
+function demandMixShares(){
+  const tot={}; let all=0;
+  DEMAND_PARTS.forEach(p=>{ tot[p.k]=0; });
+  Object.keys(MUNI_DEMAND||{}).forEach(m=>{
+    AREA_PARTS.forEach(p=>{ const v=DEMAND_W[p.k]*muniPart(m,p.k); tot[p.k]+=v; all+=v; }); });
+  tot.pop=popTerm(POP_TOTAL); all+=tot.pop;
+  return {tot,all};
+}
+
+/* ============================================================================
+   Drainage: flow distance to nearest downstream community
+   ----------------------------------------------------------------------------
+   For every upstream area, the shortest network distance (km) to any community
+   that benefits from its retention.  Pre-computed once (distances are geometry,
+   not scenario); colours the Upstream ecosystems lens under "distance" shading.
+============================================================================ */
+const distNearest={};
+let maxDistNearest=0;
+SUBBASINS.features.forEach(f=>{ const id=f.properties.id; let mn=Infinity;
+  Object.keys(distTo).forEach(m=>{ if(distTo[m][id]!==undefined) mn=Math.min(mn,distTo[m][id]); });
+  if(mn<Infinity){ distNearest[id]=mn; maxDistNearest=Math.max(maxDistNearest,mn); } });
+
+// Basins whose water ends in a severed lake or reservoir unit: their retention
+// buffers that water body instead of reaching a focus community. Precomputed so
+// styleSub can tint the whole lake catchment, not just the unit holding the lake.
+const buffersLake={};
+SUBBASINS.features.forEach(f=>{ let cur=f.properties.id,g=0;
+  while(featById[cur]&&featById[cur].next_id&&featById[featById[cur].next_id]&&g++<400) cur=featById[cur].next_id;
+  buffersLake[f.properties.id]=!!(featById[cur]&&featById[cur].barrier); });
+
+const DIST_COLS=[[10,58,106],[44,127,184],[91,191,174],[207,232,224],[232,237,242]];
+function distColor(d){
+  if(d==null) return FAINT;
+  const t=Math.min(1,d/Math.max(60,maxDistNearest*0.85));
+  const s=t*(DIST_COLS.length-1), i=Math.min(Math.floor(s),DIST_COLS.length-2);
+  return mix(DIST_COLS[i],DIST_COLS[i+1],s-i);
+}
+function decayPct(km){ return Math.pow(0.5,km/DECAY_HALFLIFE_KM); }
+/* Counterfactual ramp (ColorBrewer PuRd): the extra storm runoff a watershed
+   would produce with its natural cover stripped, as a share of what it produces
+   now. Neither the retention green nor the exposure orange, since this is the
+   one reading that measures a loss rather than either side of the ledger.
+   Square-rooted like the demand shading; the distribution is long-tailed. */
+const GAIN_COLS=[[241,238,246],[212,185,218],[223,101,176],[221,28,119],[152,0,67]];
+function gainColor(v){
+  if(!v||v<=0) return "#e8edf2";
+  const t=Math.min(1,Math.sqrt(v/MAX_GAIN));
+  const s=t*(GAIN_COLS.length-1), i=Math.min(Math.floor(s),GAIN_COLS.length-2);
+  return mix(GAIN_COLS[i],GAIN_COLS[i+1],s-i);
+}
+
+// Switch the active rainfall scenario in-browser: repoint each area's retained
+// runoff to the selected scenario, recompute derived state, and repaint.
+function setScenario(scen){
+  if(typeof RETAIN==="undefined" || !RETAIN[scen]) return;
+  activeScen=scen;
+  SUBBASINS.features.forEach(f=>{
+    f.properties.retain_m3 = RETAIN[scen][f.properties.id]||0;
+    if(typeof RETAIN_MM!=="undefined" && RETAIN_MM[scen])
+      f.properties.retain_mm = RETAIN_MM[scen][f.properties.id]||0;
+    if(typeof RETAIN_PCT!=="undefined" && RETAIN_PCT[scen])
+      f.properties.runoff_gain_pct = RETAIN_PCT[scen][f.properties.id]||0;
+  });
+  SCEN_LABEL=scenLabel(scen);
+  computeRetention(); computeDemand();   // delivery changed, so the scores do too
+  // the provider set (and so the cascade's extent) can change with the scenario
+  if(mode==="city"&&selCity) drawNetwork(selCity);
+  renderScenario();   // repaints the summary, the checked option and its note
+  styleAll(); renderControls(); renderPanel(); updateLensBanner();
+}
+
+/* formatting */
+// No rank, index or gauge headlines a card: rankings are analysis and live in
+// the static figures (99_fig4). The community card shows what does the
+// attenuating instead, the natural cover types upstream (NATTYPES, km² per
+// sub-basin).
+const km2=a=>Math.round(a).toLocaleString()+" km²";
+// retained volume: millions of m³ once it gets there, which most watersheds do
+const vol3=v=>v>=1e6?(v/1e6).toFixed(1)+" million m³":Math.round(v).toLocaleString()+" m³";
+/* Composition colours for the exposure types. Categorical, and deliberately OFF
+   the warm exposure ramp. They used to be two samples of that ramp (#a6541f and
+   #d8a15a sit within 25 and 30 RGB of it), so a dark swatch beside a map where
+   dark means more exposure implied that the built-up share drives the shade. It
+   does not: the shade is the weighted TOTAL, and at the default weights, where
+   built-up and cropland both count 1.0x, only the sum moves it and the split
+   between them has no effect at all. Distinct hues say the split is a category,
+   not a position on the scale. */
+const COMP_COL={built:"#5d6b7f",crops:"#63ab68",fac:"#7d3f9e",pop:"#4a7fa0"};
+const NAT_GROUPS=[
+  {k:"forest", l:"Forest",         c:"#2e7d4f"},
+  {k:"shrub",  l:"Shrubland",      c:"#8fae5c"},
+  {k:"grass",  l:"Grassland",      c:"#c4b454"},
+  {k:"wetland",l:"Wetland",        c:"#3f8fb8"},
+  {k:"alpine", l:"Alpine & barren",c:"#9aa5ad"}];
+// aggregate the natural cover types over a set of sub-basins (km² per group)
+function natComp(ids){
+  if(typeof NATTYPES==="undefined") return null;
+  const t={}; let any=false;
+  ids.forEach(id=>{ const n=NATTYPES[id]; if(!n) return;
+    NAT_GROUPS.forEach(g=>{ const v=n[g.k]||0; if(v>0){ t[g.k]=(t[g.k]||0)+v; any=true; } }); });
+  if(!any) return null;
+  return NAT_GROUPS.map(g=>({...g,v:t[g.k]||0})).filter(g=>g.v>=0.5);
+}
+function compHtml(comp){
+  const tot=comp.reduce((s,g)=>s+g.v,0)||1;
+  const bar=comp.map(g=>`<span style="width:${Math.max(1,Math.round(100*g.v/tot))}%;background:${g.c}"></span>`).join("");
+  const rows=comp.map(g=>`<div class="row"><span class="sw" style="background:${g.c}"></span>${g.l}<span style="margin-left:auto;font-variant-numeric:tabular-nums">${km2(g.v)}</span></div>`).join("");
+  return `<div class="comp-bar">${bar}</div><div class="mini-legend" style="margin-top:5px">${rows}</div>`;
+}
+
+/* colour */
+function lerp(a,b,t){return a+(b-a)*t;}
+function mix(c1,c2,t){return "#"+[0,1,2].map(i=>Math.round(lerp(c1[i],c2[i],t)).toString(16).padStart(2,"0")).join("");}
+/* Compressed yellow-green ramp (ColorBrewer YlGn, the family
+   99_figures_tables.R uses). Two constraints set it.
+
+   Range: with 648 watersheds tiling the screen, a full lightness range puts a
+   large step between neighbours and reads as a hard mosaic. Narrowing the range
+   shrinks every step without changing a value, and the legend carries numeric
+   endpoints so absolute level is read there. Blurring the layer was rejected: it
+   smears colour across watershed boundaries, implying a continuous field where
+   the model produces one value per watershed.
+
+   Hue: a quarter of watersheds sit in the bottom fifth of the scale, and a
+   single hue separates them by lightness alone. Yellow at the low end adds a
+   hue change, so the alpine headwaters (median 19 mm above 1500 m against
+   33-37 mm between 300 and 1500 m) separate instead of collapsing into
+   near-white. Blue-greens were rejected: on a map this full of rivers and lakes
+   they read as water. */
+const GREENS=[[240,249,190],[199,233,150],[120,198,121],[49,163,84],[20,110,60]];
+function greenColor(t){
+  const s=Math.max(0,Math.min(1,t))*(GREENS.length-1),i=Math.min(Math.floor(s),GREENS.length-2);
+  return mix(GREENS[i],GREENS[i+1],s-i);
+}
+function volColor(v){
+  if(!v||v<=0) return "#e2e8ee";
+  return greenColor(Math.sqrt(v/MAX_VOL));
+}
+/* Contribution delivered to one selected community, in the Community lens.
+   Blue rather than the ecosystems green: the subject here is water arriving
+   somewhere, not the land retaining it. Same stops as DIST_COLS, reversed:
+   there near is dark, here more is dark. */
+const CITY_COLS=[[232,237,242],[186,222,214],[91,191,174],[44,127,184],[10,58,106]];
+function cityColor(v){
+  if(!v||v<=0) return "#e2e8ee";
+  const t=Math.min(1,Math.sqrt(v/MAX_VOL));
+  const s=t*(CITY_COLS.length-1), i=Math.min(Math.floor(s),CITY_COLS.length-2);
+  return mix(CITY_COLS[i],CITY_COLS[i+1],s-i);
+}
+/* Retention depth (mm): the runoff an area holds back per km² of its natural
+   land, a property of the ecosystem rather than of the polygon or of who lives
+   downstream. Same quantity 99_fig2_prr maps per pixel, aggregated to the
+   watershed. No sqrt: mm is already area-normalised, and its spread is far
+   narrower than the volume's. */
+function depthColor(v){
+  if(!v||v<=0) return "#e2e8ee";
+  return greenColor(v/MAX_MM);
+}
+// The ramp starts with real colour and keeps white for "none". Serving one
+// community is a finding in itself, that watershed being the only upstream
+// ground the community has, and a near-white low bin read as empty.
+const SHARED_BINS=[
+  {max:0,c:"#e8edf2",l:"none"},{max:1,c:"#a3d5c8",l:"1"},{max:3,c:"#6dc2b1",l:"2–3"},
+  {max:6,c:"#3aa899",l:"4–6"},{max:10,c:"#218f85",l:"7–10"},
+  {max:14,c:"#1f7a8c",l:"11–14"},{max:99,c:"#114b6b",l:"15+"}];
+const sharedColor=n=>(SHARED_BINS.find(b=>n<=b.max)||{c:"#114b6b"}).c;
+// FAINT: land that drains away from the focus communities. A cool light grey
+// rather than near-white, so these basins still read as land, just subordinate.
+// BARRIER_FILL: watersheds whose runoff collects in a lake or reservoir.
+const C_BLUE="#2c7fb8",C_ORANGE="#df744a",C_GOLD="#e9b730",
+      FAINT="#dce3ea",BARRIER_FILL="#d9d2c6";
+// One tone for "inside the study area, carrying no exposure", used by both
+// reads: a community with none of its own, and the ground inside a community
+// that the floodplain does not reach. Keeping them identical means the reader
+// never has to tell two kinds of empty apart.
+const NO_EXPOSURE="#c9d4de", NO_EXPOSURE_FILL=0.6;
+// Opening screen only: a different tint per regional district, so the MVRD /
+// FVRD split is visible before anything is picked. Kept close in value, so they
+// read as one family of clickable communities rather than as a result.
+const RD_TINT={ MVRD:{fill:"#6f96bd",line:"#2f5d80"}, FVRD:{fill:"#74aea4",line:"#2f6b63"} };
+const rdTint=p=>RD_TINT[p.rd]||RD_TINT.MVRD;
+
+/* ============================================================================
+   Map
+============================================================================ */
+// Pan and zoom-out are capped to a box derived from the study area rather than
+// hardcoded, so the cap follows the AOI and the fully zoomed-out view stays
+// centred on it. Nothing is removed: the transboundary Whatcom watersheds are
+// part of the model and stay visible. minZoom is the zoom at which the whole
+// box fits the window, leaving nowhere to pan at full zoom-out;
+// maxBoundsViscosity 1 makes the edge solid rather than rubber-banding. Both
+// are applied in setDomainLimits(), once subLayer exists.
+const DOMAIN_PAD=1.6;      // multiples of the study area's own span, per side
+let DOMAIN_BOUNDS=null;
+// Reader-driven zoom steps by whole levels (wheel, buttons, double-click),
+// which keeps basemap tiles at their native resolution. Programmatic frames are
+// the exception: a fitted frame often sits between two levels, so flyToFrame()
+// relaxes the snap for the flight and restores it on arrival. The map can rest
+// on a fractional zoom, but the next reader action snaps back to a whole one.
+const map=L.map("map",{zoomControl:false,maxBoundsViscosity:1.0,
+  zoomSnap:1,zoomDelta:1}).setView([49.45,-122.0],9);
+const FRAME_SNAP=0.25, BASE_SNAP=1;
+// Restore to BASE_SNAP, not to the snap on entry: a fast tab switch overlaps
+// two flights, so capturing the previous value would capture the relaxed 0.25
+// and leave interaction stuck there. The timeout is a backstop for a flight
+// whose moveend/zoomend never arrives.
+let frameSnapTimer=null;
+function flyToFrame(frame,opts){
+  map.options.zoomSnap=FRAME_SNAP;
+  const restore=()=>{ map.options.zoomSnap=BASE_SNAP; };
+  clearTimeout(frameSnapTimer);
+  frameSnapTimer=setTimeout(restore,1500);
+  map.once("moveend",restore); map.once("zoomend",restore);
+  map.flyToBounds(frame,opts);
+}
+// same relaxation for measuring a frame's ideal zoom
+function frameZoom(b){
+  const prev=map.options.zoomSnap; map.options.zoomSnap=FRAME_SNAP;
+  const z=map.getBoundsZoom(b); map.options.zoomSnap=prev; return z;
+}
+function setDomainLimits(){
+  DOMAIN_BOUNDS=subLayer.getBounds().pad(DOMAIN_PAD);
+  map.setMaxBounds(DOMAIN_BOUNDS);
+  map.setMinZoom(map.getBoundsZoom(DOMAIN_BOUNDS));
+}
+// a resized window changes which zoom fits the box, so recompute the floor
+map.on("resize",()=>{ if(DOMAIN_BOUNDS) map.setMinZoom(map.getBoundsZoom(DOMAIN_BOUNDS)); });
+L.control.zoom({position:"topright"}).addTo(map);
+// Reset control: clear the selection and stay in the current lens, since
+// "nothing selected" is a state rather than a place to be sent back to.
+const ResetCtl=L.Control.extend({options:{position:"topright"},
+  onAdd:function(){ const b=L.DomUtil.create("button","leaflet-bar reset-btn");
+    b.innerHTML="↺"; b.title="Clear the selection"; L.DomEvent.disableClickPropagation(b);
+    L.DomEvent.on(b,"click",()=>resetApp()); return b; }});
+map.addControl(new ResetCtl());
+function resetApp(){
+  selCity=null; cmpCity=null; cmpOpen=false; selSub=null;
+  // a reset clears what the cursor is holding as well as what was picked: the
+  // control sits inside the map, so moving onto it from a shape can leave that
+  // shape's hover outline and its sticky tooltip behind, still looking selected
+  unhover(); unhoverDa();
+  lastFit=null;      // an explicit reset DOES reframe, even within the same lens
+  // compare only exists while two communities are picked, so clearing it lands
+  // in the Community lens it is a sub-mode of; every other lens stays put.
+  setMode(mode==="compare" ? "city" : mode);
+}
+// Explicit stacking order via dedicated panes, so the drainage network always
+// sits ABOVE the shaded polygons (areas < community outlines < rivers < flow).
+// Community-name chips live in Leaflet's tooltipPane (z 650), on top of all.
+['areas','munis','rivers','flow'].forEach((n,i)=>{map.createPane(n).style.zIndex=410+i*15;});
+map.createPane("riverbed").style.zIndex=416; // realistic river ribbons, UNDER the drawn network + flow animation
+map.createPane("lakes").style.zIndex=418;   // visible water bodies, above area fill, below outlines
+map.createPane("dabg").style.zIndex=420;    // "no exposure here" backdrop, UNDER the neighbourhood fills
+map.createPane("das").style.zIndex=421;     // neighbourhood exposure fill, UNDER the community outlines it sits inside
+map.createPane("dapick").style.zIndex=428;  // picked neighbourhood + its border, ABOVE the community outlines
+map.getPane("dapick").style.pointerEvents="none";   // a mark, never a target
+map.createPane("fn").style.zIndex=432;      // First Nation lands overlay, above community fills, below rivers
+map.createPane("overlay").style.zIndex=436; // downstream designation overlays (ALR / RNIN), below the drainage network
+// Terrain context: a hillshade base under the label-free CARTO layer at 0.85
+// opacity, so about 15% of the relief shows through, enough to separate
+// mountains from valley without competing with the data. The Terrain toggle
+// drops the hillshade and makes CARTO fully opaque.
+const hillshade = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}",{
+  attribution:'Hillshade &copy; Esri',maxZoom:19}).addTo(map);
+const baseLight = L.tileLayer("https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png",{
+  attribution:'&copy; OpenStreetMap, &copy; CARTO',subdomains:"abcd",maxZoom:19,opacity:0.85}).addTo(map);
+function setTerrain(on){ if(on){ hillshade.addTo(map); baseLight.setOpacity(0.85); }
+  else { map.removeLayer(hillshade); baseLight.setOpacity(1); } }
+// study-area outline in the munis pane so it stays visible over shaded areas
+/* Study-area frame: the outer edge of the downstream demand area (MVRD u
+   FVRD). Deep teal, the colour the lens banners use for "the region", legible
+   over the greens and distinct from both the warm exposure ramp and the grey
+   dashes of the community boundaries inside it. */
+L.geoJSON(AOI,{pane:"munis",style:{color:"#1a6a72",weight:2,fill:false,dashArray:"7 5",opacity:0.85},interactive:false}).addTo(map);
+// realistic hydrography: the Fraser main stem + major tributaries as real river
+// polygons, drawn UNDER the drawn stream network so the trunk reads as an
+// actual river beneath it.
+if(typeof RIVERS!=="undefined") L.geoJSON(RIVERS,{pane:"riverbed",interactive:false,
+  style:{fillColor:"#a6cbe6",fillOpacity:0.85,color:"#7fb0d6",weight:0.4}}).addTo(map);
+// major lakes so their labels sit on real water (Harrison, Pitt, Stave …).
+// Lakes are punched OUT of the sub-basin fills, so a click on the water would
+// otherwise fall into a hole and select nothing. The lakes layer therefore
+// catches clicks and forwards them to the watershed whose OUTER boundary
+// encloses the point (holes ignored), making lake watersheds easy to select.
+function ringContains(ring,lng,lat){ let inside=false;
+  for(let i=0,j=ring.length-1;i<ring.length;j=i++){
+    const xi=ring[i][0],yi=ring[i][1],xj=ring[j][0],yj=ring[j][1];
+    if(((yi>lat)!==(yj>lat)) && (lng < (xj-xi)*(lat-yi)/(yj-yi)+xi)) inside=!inside; }
+  return inside; }
+// A click on the map in the Community lens. The unit being read there is the
+// community, and over most of the region a community polygon takes the click
+// before the watershed under it sees anything. Where none covers the ground the
+// click fell through to the watershed and moved the reader to the ecosystems
+// tab unasked, so no watershed takes a map click in this lens. They stay
+// readable on hover, and the panel's contributor rows still open them.
+function areaClickFromMap(id){
+  if(mode==="city"||mode==="compare") return;
+  onAreaClick(id);
+}
+function subAtLatLng(ll){
+  for(const f of SUBBASINS.features){ const g=f.geometry; if(!g) continue;
+    const polys=g.type==="Polygon"?[g.coordinates]:g.type==="MultiPolygon"?g.coordinates:[];
+    for(const p of polys){ if(p.length && ringContains(p[0],ll.lng,ll.lat)) return f.properties.id; } }
+  return null; }
+if(typeof LAKES!=="undefined") L.geoJSON(LAKES,{pane:"lakes",interactive:true,
+  style:{fillColor:"#a6cbe6",fillOpacity:0.7,color:"#6c9fc6",weight:0.5},
+  onEachFeature:(f,l)=>l.on("click",e=>{ L.DomEvent.stop(e);
+    const id=subAtLatLng(e.latlng); if(id) areaClickFromMap(id); })}).addTo(map);
+
+const riverGroup=L.layerGroup().addTo(map);   // persistent drainage skeleton (rivers pane)
+const flowGroup=L.featureGroup().addTo(map);  // animated cascade on community selection (flow pane)
+const subLayer=L.geoJSON(SUBBASINS,{
+  pane:"areas",
+  style:f=>styleSub(f.properties),
+  onEachFeature:(f,layer)=>{
+    subById[f.properties.id]=layer;
+    layer.on("click",e=>{L.DomEvent.stop(e);areaClickFromMap(f.properties.id);});
+    // Lake/reservoir barrier: name it on hover + explain why flow stops here, so
+    // the water body reads as intentional rather than a broken faint patch.
+    // Basins DRAINING into a severed lake get their own hover explanation too.
+    if(f.properties.barrier) layer.bindTooltip(barrierExpl(f.properties),{className:"area-tip",sticky:true});
+    else if(f.properties.drains_south) layer.bindTooltip(
+      `<b>${f.properties.name||"This watershed"}</b> · drains south into Washington<br>Water does not reach the Fraser, so retention is not credited to Lower Fraser communities.`,
+      {className:"area-tip",sticky:true});
+    else if(buffersLake[f.properties.id]) layer.bindTooltip(
+      `<b>${f.properties.name||"This watershed"}</b> · drains to a lake or reservoir<br>Its retention buffers that water body rather than reaching a community.`,
+      {className:"area-tip",sticky:true});
+    // hover only outlines the area; information is shown on click, so there is
+    // one unambiguous selected state
+    layer.on("mouseover",()=>{ const id=f.properties.id; if(hoveredId===id) return;
+      unhover();                                            // clear the previous hover, whose mouseout may never have fired
+      hoveredId=id; layer.setStyle({weight:2,color:"#0d2030"}); layer.bringToFront(); });
+    layer.on("mouseout",()=>{ if(hoveredId===f.properties.id) unhover(); });
+  }}).addTo(map);
+const muniLayer=L.geoJSON(MUNIS,{
+  pane:"munis",
+  style:f=>styleMuni(f.properties),
+  onEachFeature:(f,layer)=>{
+    const id=f.properties.muni_id;
+    const isRes=f.properties.member_type==="Reserve";
+    muniLyr[id]=layer;                    // index for fly-to / bounds
+    if(!isRes) layer.on("click",e=>{L.DomEvent.stop(e);onMuniClick(id);});
+    muniLabel[id]=L.tooltip({permanent:true,direction:"center",className:"muni-label",content:f.properties.muni})
+      .setLatLng([f.properties.cy,f.properties.cx]);
+    // Names appear on HOVER (so the map isn't plastered with all of them); the
+    // selected one stays shown.
+    layer.on("mouseover",()=>{ if(isRes) return;
+      if(document.getElementById("tg-label").checked) map.addLayer(muniLabel[id]);
+      if(mode==="city" && !selCity) layer.setStyle({weight:2,color:"#20496a",fillColor:"#4d7ba6",fillOpacity:.22}); });
+    layer.on("mouseout",()=>{ const sel=(mode==="city"&&id===selCity)||(mode==="compare"&&(id===cityA||id===cityB));
+      if(!sel) map.removeLayer(muniLabel[id]);
+      if(mode==="city" && !selCity) layer.setStyle(styleMuni(layer.feature.properties)); });
+  }}).addTo(map);
+// Neighbourhood exposure by dissemination area. Display only, and shaded only
+// in the demand view; transparent elsewhere. Its pane sits under the community
+// outlines, so a shaded neighbourhood reads as part of its community. Outside
+// the demand view a click passes through to that community, still the unit
+// everything else is read against.
+let daLayer=null;
+if(hasDaData){
+  daLayer=L.geoJSON(DAS,{
+    pane:"das",
+    style:f=>styleDA(f.properties),
+    onEachFeature:(f,l)=>{
+      const p=f.properties;
+      daLyr[p.da_id]=l;                   // index for the panel's fly-to
+      l.bindTooltip(()=>daTip(p.da_id),{className:"area-tip",sticky:true});
+      // Outline on hover only in the read where a neighbourhood is the unit;
+      // elsewhere the layer is inert and must not light up under the cursor.
+      l.on("mouseover",()=>{ if(!daReadActive()||daDemand[p.da_id]<=0) return;
+        if(hoveredDa===p.da_id) return;
+        unhoverDa(); hoveredDa=p.da_id; l.setStyle(styleDA(p)); l.bringToFront(); });
+      l.on("mouseout",()=>{ if(hoveredDa===p.da_id) unhoverDa(); });
+      // A neighbourhood is a way of reading exposure rather than a unit of the
+      // model, so picking one opens a card and nothing else: no reframe, no tab
+      // change, and no effect on what either side of the ledger measures. In
+      // the other lenses a click passes through to the community it belongs to.
+      l.on("click",e=>{L.DomEvent.stop(e);
+        if(mode==="ledger"){
+          // a neighbourhood carrying no exposure under the current weights is
+          // not a thing the panel can describe, so it stays unpicked
+          if(daReadActive()&&daDemand[p.da_id]>0) selectInLedger("da",p.da_id);
+          return; }
+        if(p.muni_id!=null) onMuniClick(p.muni_id);});
+    }}).addTo(map);
+}
+// hover card for one neighbourhood: what it carries, and how much of it is exposed
+function daTip(id){
+  const d=DA_DEMAND[id]; if(!d) return "";
+  const share=d.km2>0?100*daArea(id)/d.km2:0;
+  return `<b>${muniName(d.muni)}</b> · neighbourhood`
+    +`<br>${daArea(id)<0.01?"<0.01":daArea(id).toFixed(2)} km² exposed`
+    +` · ${share<1?"<1":Math.round(share)}% of this area`
+    +`<br><span style="opacity:.7">${d.pop.toLocaleString()} residents · dissemination area ${id}</span>`;
+}
+// "No exposure here" backdrop for the neighbourhood read. Only the 270
+// neighbourhoods the floodplain reaches are drawn, out of 4,139 in the region,
+// so without this every other part of a community shows the basemap and reads
+// as missing data rather than as ground the floodplain does not reach. It takes
+// the same tone as a community carrying no exposure, sits under the DA fills so
+// it never dulls them, and is inert.
+let daBgLayer=null;
+function styleDaBg(p){
+  const off={weight:0,fill:true,fillColor:NO_EXPOSURE,fillOpacity:0};
+  if(!daReadActive()) return off;
+  const hosted=(daByMuni[p.muni_id]||[]).some(k=>daDemand[k]>0);
+  return hosted?{weight:0,fill:true,fillColor:NO_EXPOSURE,fillOpacity:NO_EXPOSURE_FILL}:off;
+}
+if(hasDaData){
+  daBgLayer=L.geoJSON(MUNIS,{pane:"dabg",interactive:false,
+    style:f=>styleDaBg(f.properties)}).addTo(map);
+}
+// function declaration, not a const arrow: the backdrop layer is built above and
+// Leaflet evaluates its style function immediately, so this has to be hoisted
+function daReadActive(){ return mode==="ledger"&&ledgerView==="demand"&&hasDaData; }
+// Drop the hover outline from whichever neighbourhood holds it, through one
+// tracker rather than each layer's own mouseout, which a fast cursor can drop.
+function unhoverDa(){
+  if(hoveredDa==null) return;
+  const l=daLyr[hoveredDa], id=hoveredDa;
+  hoveredDa=null;
+  // the tooltip is sticky, so it stays open on a mouseout that never arrives
+  if(l){ l.setStyle(styleDA(l.feature.properties)); if(l.closeTooltip) l.closeTooltip(); }
+  liftSelection();
+}
+// First Nation lands overlay (off by default; Display options). Own pane so the
+// lens-specific pointer-events rules on the munis pane don't affect it.
+let fnLayer=null;
+if(typeof FIRSTNATIONS!=="undefined" && FIRSTNATIONS.features && FIRSTNATIONS.features.length){
+  fnLayer=L.geoJSON(FIRSTNATIONS,{pane:"fn",
+    style:{color:"#7d3f9e",weight:1.3,dashArray:"4 3",fill:true,fillColor:"#9a6bbd",fillOpacity:0.14},
+    onEachFeature:(f,l)=>{
+      const p=f.properties,
+            kind=p.member_type==="Reserve"?"Indian Reserve":"Treaty lands",
+            rd=p.rd==="MVRD"?"Metro Vancouver":"Fraser Valley";
+      l.bindTooltip(`<b>${p.name}</b><br>${kind} · ${rd}`,{className:"area-tip",sticky:true});
+    }});
+}
+// Downstream designation overlays (display only, off by default): the
+// Agricultural Land Reserve, and Metro Vancouver's Regional Natural
+// Infrastructure Network of habitat patches and corridors. Context, not model
+// inputs: nothing in the retention or routing model reads them, and no
+// relationship to the modelled contribution is asserted. Built lazily on first
+// toggle (RNIN ships 2,211 patch polygons) and non-interactive, so clicks fall
+// through to the sub-basins and communities underneath.
+const RNIN_COL={Major:"#146c63",Minor:"#7cc5bb"};
+const CORRIDOR_STYLE={"Habitat corridors":{c:"#14867a",w:2,d:"6 4"},
+                      "Foreshore corridors":{c:"#0f6e86",w:2.6,d:"2 4"}};
+const OVERLAYS={
+  alr:{data:typeof ALR!=="undefined"?ALR:null,
+       opts:{pane:"overlay",interactive:false,
+             style:{color:"#8a6412",weight:1,dashArray:"4 3",fill:true,
+                    fillColor:"#d9b45c",fillOpacity:0.22}}},
+  rninP:{data:typeof RNIN_PATCH!=="undefined"?RNIN_PATCH:null,
+         opts:{pane:"overlay",interactive:false,
+               style:f=>{const c=RNIN_COL[f.properties.cls]||RNIN_COL.Minor;
+                 return {color:c,weight:0.6,fill:true,fillColor:c,fillOpacity:0.42};}}},
+  rninC:{data:typeof RNIN_CORRIDOR!=="undefined"?RNIN_CORRIDOR:null,
+         opts:{pane:"overlay",interactive:false,
+               style:f=>{const s=CORRIDOR_STYLE[f.properties.cls]||CORRIDOR_STYLE["Habitat corridors"];
+                 return {color:s.c,weight:s.w,dashArray:s.d,opacity:0.9,fill:false};}}}
+};
+const overlayLyr={};
+const hasOverlay=k=>{const d=OVERLAYS[k];return !!(d&&d.data&&d.data.features&&d.data.features.length);};
+function setOverlay(key,on){
+  if(!hasOverlay(key)) return;
+  if(on){ if(!overlayLyr[key]) overlayLyr[key]=L.geoJSON(OVERLAYS[key].data,OVERLAYS[key].opts);
+          overlayLyr[key].addTo(map); }
+  else if(overlayLyr[key]) map.removeLayer(overlayLyr[key]);
+}
+// A build whose shapefile was missing ships an empty layer; hide its toggle
+// rather than offering a control that does nothing (and hide the whole group
+// if none of the three made it in).
+function initOverlayToggles(){
+  const pairs=[["tg-alr","alr"],["tg-rnin-p","rninP"],["tg-rnin-c","rninC"]];
+  let any=false;
+  pairs.forEach(([id,key])=>{
+    const el=document.getElementById(id); if(!el) return;
+    const lab=el.closest("label");
+    if(!hasOverlay(key)){ if(lab) lab.style.display="none"; return; }
+    any=true;
+    el.onchange=e=>setOverlay(key,e.target.checked);
+  });
+  const g=document.getElementById("desig-group");
+  if(g&&!any) g.style.display="none";
+}
+
+buildRivers();
+
+// Each lens frames the map differently: the community and demand views hold the
+// populated MVRD/FVRD corridor (muniLayer bounds), the ecosystems view pulls
+// back to the whole watershed.
+let lastFit=null;   // which frame the map is currently flown to
+// The supply view frames every contributing area, so the whole supplying
+// landscape is in view at once. Tighter than the full watershed, which also
+// holds land draining away from every focus community, but it clips nothing
+// that contributes. Computed once at load, so the sliders never reframe the map.
+let SUPPLY_BOUNDS=null;
+function computeSupplyBounds(){
+  const b=L.latLngBounds([]);
+  Object.keys(regionScore).forEach(j=>{
+    if(regionScore[j]>0){ const lyr=subById[j]; if(lyr) b.extend(lyr.getBounds()); } });
+  SUPPLY_BOUNDS = b.isValid() ? b.pad(0.03) : subLayer.getBounds();
+}
+// Bounds of the watersheds that contribute to the picked community (or pair),
+// plus the community itself, so the cascade is framed rather than clipped.
+function contributingBounds(){
+  const ids=[selCity,cmpCity].filter(m=>m!=null);
+  const b=L.latLngBounds([]);
+  ids.forEach(m=>{
+    const lyrIds=new Set([...(providersOfMuni[m]||[]), ...(MUNI_BASINS[m]||[])]);
+    lyrIds.forEach(j=>{ const lyr=subById[j]; if(lyr) b.extend(lyr.getBounds()); });
+    const ml=muniLyr[m]; if(ml) b.extend(ml.getBounds());
+  });
+  return b.isValid() ? b.pad(0.08) : null;
+}
+function fitForMode(animate){
+  // Community and demand views frame the corridor, supply frames the supplying
+  // landscape, the rest frame the whole watershed. A community pick pulls back
+  // to its contributing watersheds so the cascade is in view; later picks only
+  // expand that frame, never zoom in.
+  const o={padding:[16,16],duration:0.7,animate:animate!==false};
+  const cityLens=(mode==="city"||mode==="compare");
+  if(cityLens && (selCity!=null || cmpCity!=null)){
+    const frame=contributingBounds();
+    if(!frame) return;
+    if(lastFit==="contributing"){
+      if(map.getBounds().pad(0.02).contains(frame)) return;
+      const expanded=L.latLngBounds(map.getBounds().getSouthWest(), map.getBounds().getNorthEast());
+      expanded.extend(frame);
+      flyToFrame(expanded,o);
+      return;
+    }
+    lastFit="contributing";
+    flyToFrame(frame,o);
+    return;
+  }
+  const target=cityLens || (mode==="ledger"&&ledgerView==="demand")
+    ? "corridor"
+    : (mode==="ledger"&&ledgerView==="supply") ? "supply" : "watershed";
+  if(target===lastFit) return;
+  lastFit=target;
+  // each frame is padded so the subject clears the window edge; the corridor,
+  // being the opening view, gets the most
+  const frame = target==="corridor" ? muniLayer.getBounds().pad(0.28)
+              : target==="supply"   ? (SUPPLY_BOUNDS||subLayer.getBounds())
+              : subLayer.getBounds().pad(0.04);
+  flyToFrame(frame,o);
+}
+
+setDomainLimits();       // pan/zoom floor, derived from the study area
+computeSupplyBounds();   // weights are still at the model's defaults here
+fitForMode(false);
+
+// Geographic anchors for the upstream side, rivers and lakes only: communities
+// are named on hover instead, so no subset of them carries a fixed label. Lake
+// labels sit on the lake body, off the drainage trunks, and each label has a
+// minimum zoom so close-together lakes (Pitt, Stave) declutter when zoomed out.
+const GEO_LABELS=[
+  {nm:"Fraser River",  lat:49.19,  lng:-121.78,          minz:8},
+  {nm:"Harrison Lake", lat:49.514, lng:-121.86, water:1, minz:9},   // centroids of the real lake polygons (LAKES layer)
+  {nm:"Pitt Lake",     lat:49.434, lng:-122.56, water:1, minz:10},
+  {nm:"Stave Lake",    lat:49.435, lng:-122.30, water:1, minz:10}
+];
+const geoLabels=GEO_LABELS.map(o=>({ minz:o.minz||0, maxz:o.maxz||99,
+  tt:L.tooltip({permanent:true,direction:"center",
+    className:"geo-label"+(o.water?" water":""),
+    content:o.nm,interactive:false}).setLatLng([o.lat,o.lng]) }));
+// add/remove each label based on the place-labels toggle AND the current zoom
+function applyGeoLabels(){
+  const show=document.getElementById("tg-label").checked, z=map.getZoom();
+  geoLabels.forEach(o=>{ (show && z>=o.minz && z<=o.maxz) ? o.tt.addTo(map) : map.removeLayer(o.tt); });
+}
+map.on("zoomend", updateLabels);     // community labels declutter by zoom (also runs applyGeoLabels)
+map.on("zoomend", restyleStreams);   // rivers thin out when zoomed out, thicken when zoomed in
+// the hover outline is drawn to the shape's size on screen, which the zoom
+// changes, so redraw it
+map.on("zoomend", ()=>{ if(!daReadActive()||hoveredDa==null) return;
+  const l=daLyr[hoveredDa]; if(l) l.setStyle(styleDA(l.feature.properties)); });
+
+// Clear the hover outline from whichever area holds it. One tracker rather than
+// each layer's own mouseout, which a fast cursor move can drop.
+function unhover(){
+  if(hoveredId==null) return;
+  const l=subById[hoveredId];
+  if(l) l.setStyle(styleSub(l.feature.properties));   // styleSub restores base style (incl. the selected-area outline if it's selSub)
+  hoveredId=null;
+  liftSelection();
+}
+// Hovering raises the shape under the cursor, and the raise outlives the hover:
+// setStyle restores the colours but not the paint order. A neighbour left in
+// front then paints its own edge over the selected outline along the boundary
+// they share, so the selection loses its bold edge on the side just hovered.
+// Putting the selection back on top whenever a hover is dropped restores it.
+function liftSelection(){
+  flowChain.forEach(cid=>{ const l=subById[cid]; if(l) l.bringToFront(); });  // the chain's own order, set when it was drawn
+  const areaId=(mode==="ledger"&&ledgerSel&&ledgerSel.t==="area") ? ledgerSel.id : selSub;
+  if(areaId!=null&&subById[areaId]) subById[areaId].bringToFront();
+  if(mode==="ledger"&&ledgerSel&&ledgerSel.t==="da"&&daLyr[ledgerSel.id]) daLyr[ledgerSel.id].bringToFront();
+}
+map.on("mouseout", ()=>{ unhover(); unhoverDa(); });   // leaving the map clears both hovers
+
+/* ============================================================================
+   Styling
+============================================================================ */
+function showArea(){return document.getElementById("tg-area").checked;}
+function styleMuni(p){
+  const id=p.muni_id;
+  // In the community picker these carry a blended fill so they do not read as
+  // white holes; everywhere else they are fully transparent and the sub-basin
+  // shading shows through.
+  if(p.member_type==="Reserve"){
+    const picker=(mode==="city"||mode==="compare") && !selCity && !cmpCity;
+    return {weight:0,fill:true,fillColor:rdTint(p).fill,fillOpacity:picker?0.12:0};
+  }
+  if(mode==="compare"){
+    if(id===cityA) return {color:"#16435f",weight:2.5,fill:true,fillColor:C_BLUE,fillOpacity:.22};
+    if(id===cityB) return {color:"#7a3a1f",weight:2.5,fill:true,fillColor:C_ORANGE,fillOpacity:.22};
+    return {color:"#5b6b7e",weight:.8,fill:true,fillColor:"#8aa0b6",fillOpacity:0,dashArray:"2 3"};
+  }
+  if(mode==="city" && selCity){
+    if(id===selCity) return {color:"#6b5210",weight:2.6,fill:true,fillColor:C_GOLD,fillOpacity:.2};
+    // With a community selected, the others fade out so the selection and its
+    // upstream shed stand alone; neighbours sharing contribution still rank in
+    // the side panel. The fill is kept, fully transparent, so a faded
+    // neighbour stays hoverable and clickable.
+    return {color:"#5b6b7e",weight:0,fill:true,fillColor:"#8aa0b6",fillOpacity:0};
+  }
+  if(mode==="ledger"){
+    // Demand side: shade each community by the exposure it carries under the
+    // current weights, so the reader sees WHERE the risk sits. On the supply
+    // side the communities step back to outlines and the upstream areas lead.
+    if(ledgerView==="demand"){
+      // The community keeps its boundary and hands the fill to the
+      // neighbourhood layer beneath, so the shading shows WHICH PART of it is
+      // exposed instead of colouring the whole polygon by a total. A community
+      // whose demand basins put the exposed ground just over its own boundary
+      // has no exposed neighbourhood, so it takes the no-exposure tone rather
+      // than reading as a hole.
+      if(daReadActive())
+        return (daByMuni[id]||[]).some(k=>daDemand[k]>0)
+          ? {color:"#8a3b12",weight:0.9,fill:true,fillColor:NO_EXPOSURE,fillOpacity:0}
+          : {color:"#8fa1b4",weight:0.7,fill:true,fillColor:NO_EXPOSURE,fillOpacity:NO_EXPOSURE_FILL};
+      // fallback for a build with no DA table: shade the communities themselves
+      const v=muniDemandView[id]||0;
+      return v>0 ? {color:"#8a3b12",weight:1,fill:true,fillColor:demandColor(v),fillOpacity:0.85}
+                 : {color:"#8fa1b4",weight:0.7,fill:true,fillColor:NO_EXPOSURE,fillOpacity:NO_EXPOSURE_FILL};
+    }
+    return {color:"#4a5c70",weight:1,fill:true,fillColor:"#8aa0b6",fillOpacity:0.05};
+  }
+  if(mode==="city" && !selCity){
+    // Nothing picked yet: draw every community as an explicit, clickable region.
+    // Municipalities and electoral areas get a firmer outline, treaty lands
+    // read lighter.
+    const fn=p.member_class==="First Nation",t=rdTint(p);  // treaty land (e.g. Tsawwassen)
+    return {color:fn?"#7d8b9a":t.line,weight:fn?0.7:1.6,fill:true,
+            fillColor:t.fill,fillOpacity:fn?0.05:0.12};
+  }
+  return {color:"#5b6b7e",weight:.8,fill:true,fillColor:"#8aa0b6",fillOpacity:0,dashArray:"2 3"};
+}
+// Neighbourhood exposure fill: drawn only in the demand view's neighbourhood
+// read, invisible and inert elsewhere, so the DA boundaries never add a second
+// grid over the watersheds and communities.
+// Hover outline width, scaled to how big the shape actually draws. These units
+// run from two city blocks to a whole valley: at the opening demand frame the
+// median exposed one is about 5 px across and only a handful clear 200, so one
+// fixed width cannot serve both. Measured in pixels rather than area, so
+// zooming in on a small neighbourhood earns it the same firm outline a large
+// one gets. The picked neighbourhood carries no outline at all; it is marked by
+// the others receding around it, which no width can get out of proportion.
+function daPx(id){
+  const l=daLyr[id];
+  if(!l||!l.getBounds) return 140;   // until the layer exists, assume a large shape
+  const b=l.getBounds(),
+        a=map.latLngToLayerPoint(b.getNorthWest()),
+        c=map.latLngToLayerPoint(b.getSouthEast());
+  return Math.max(Math.abs(c.x-a.x),Math.abs(c.y-a.y));
+}
+function daEdge(id){
+  return 0.75+Math.max(0,Math.min(1,(daPx(id)-10)/130))*0.85;
+}
+// The picked neighbourhood's mark: a black border and a copy of the shape's
+// fill, drawn as their own layers in their own pane rather than as a stroke on
+// the neighbourhood itself. Three things forced that.
+//
+// The pane has to sit ABOVE the community outlines. Those are drawn over the
+// neighbourhood fills, so wherever a neighbourhood edge runs along a community
+// edge the brown community line painted over the black border. Being a fixed
+// set of edges, the same sides came out lighter every time.
+//
+// The border has to be built from EXTERIOR rings only. Stroking the shape put a
+// border on every ring it has, and a hole narrower than the stroke was filled
+// in solid by it. A hole is where the neighbourhood is not, so it carries no
+// border, and the fill copy keeps the holes clear.
+//
+// The border is drawn first and the fill copy over it, which is what makes the
+// border outward. SVG centres a stroke on its path, half in and half out, so
+// the inner half would cover the shape's own colour; the fill copy takes that
+// half back and leaves the outer half alone. Outward means the border adds size
+// rather than eating it, which is what settles the small-neighbourhood case: a
+// shape a few pixels across gains a ring instead of being swallowed by one.
+//
+// The glow rides the border layer, so it sits outside the black edge and
+// follows the shape all the way round. It carries no offset, since an offset
+// falls on some edges and not others, which reads as an inconsistent mark.
+const DA_PICK_W=3;          // 3 px stroke, inner half covered, so 1.5 px shows outside
+const DA_PICK_GLOW="drop-shadow(0 0 2px rgba(0,0,0,.7)) drop-shadow(0 0 6px rgba(0,0,0,.42))";
+const pickEdge=L.layerGroup().addTo(map);
+// exterior rings only: drop every ring after the first in each polygon
+function outerOnly(g){
+  if(!g) return null;
+  if(g.type==="Polygon") return {type:"Polygon",coordinates:[g.coordinates[0]]};
+  if(g.type==="MultiPolygon") return {type:"MultiPolygon",coordinates:g.coordinates.map(r=>[r[0]])};
+  return g;
+}
+function markPicked(){
+  pickEdge.clearLayers();
+  const id=(daReadActive()&&ledgerSel&&ledgerSel.t==="da") ? ledgerSel.id : null;
+  if(id==null) return;
+  const l=daLyr[id]; if(!l||!l.feature) return;
+  const geom=l.feature.geometry, outer=outerOnly(geom);
+  if(!outer) return;
+  // Border first, then a copy of the neighbourhood's fill over it. The fill
+  // covers the border's inner half, so only the outward half is left showing,
+  // and it carries the shape's holes, which stay clear as they should.
+  const edge=L.geoJSON(outer,{pane:"dapick",interactive:false,
+    style:{color:"#000",weight:DA_PICK_W,opacity:1,fill:false}}).addTo(pickEdge);
+  edge.eachLayer(x=>{ const el=x.getElement&&x.getElement(); if(el) el.style.filter=DA_PICK_GLOW; });
+  L.geoJSON(geom,{pane:"dapick",interactive:false,
+    style:{stroke:false,weight:0,fill:true,
+           fillColor:daColor(daDemand[id]||0),fillOpacity:1}}).addTo(pickEdge);
+}
+
+
+function styleDA(p){
+  const off={weight:0,fill:true,fillColor:NO_EXPOSURE,fillOpacity:0};
+  if(!daReadActive()) return off;
+  const v=daDemand[p.da_id]||0;
+  if(v<=0) return off;
+  // Hover names the unit, so the boundaries do not have to be drawn to make it
+  // legible: one dark outline follows the cursor.
+  if(hoveredDa===p.da_id)
+    return {color:"#0d2030",weight:daEdge(p.da_id),opacity:1,fill:true,
+            fillColor:daColor(v),fillOpacity:0.95};
+  // Seam stroke, as the sub-basins use: a neighbourhood is outlined in its own
+  // fill colour. A drawn boundary between every pair of the 270 units read as a
+  // second grid laid over the communities, and the exposure it divides is the
+  // subject, not the census geography. Painting the outline in the fill still
+  // covers the hairline cracks between simplified neighbours, and a boundary
+  // remains visible exactly where two neighbourhoods differ in value.
+  const c=daColor(v);
+  // Everything else stays at full strength whether or not something is picked,
+  // so the exposure pattern reads the same either way.
+  return {color:c,weight:0.9,opacity:0.9,fill:true,fillColor:c,fillOpacity:0.9};
+}
+// Short explainer for a severed lake/reservoir unit (hover tooltip + click popup).
+function barrierExpl(p){
+  const t=(p.barrier_type||"water body").toLowerCase(), nm=p.name||"This watershed";
+  return `<b>${nm}</b> · watershed with a ${t}<br>Runoff collects in the ${t}, so retention is not credited downstream of it.`
+    + (p.barrier_type==="Reservoir"?" Dam outflow is controlled.":"");
+}
+function styleSub(p){
+  const g=GRAPH[p.id],on=showArea();
+  // Flow-chain glow first, so a clicked barrier watershed still lights up: its
+  // chain is just itself, the water body ending the path. The clicked area and
+  // the basins its water drains through glow blue, the source strongest.
+  if((mode==="subbasin"||(mode==="ledger"&&ledgerView==="supply"))&&flowChainSet.has(p.id)){
+    const src=p.id===chainSource();
+    return {className:"glow-basin"+(src?" glow-source":""),fillColor:"#2bb3e6",
+      fillOpacity:src?0.7:0.5,weight:src?2.6:1,color:src?"#08334d":"#1f7a8c",opacity:1,fill:true};
+  }
+  // The retention lens is the one biophysical reading on the map: it asks what
+  // the land holds back, full stop, so it shades every watershed the model
+  // covers and gates on nothing. Every other lens is about who is downstream.
+  // Both readings in this lens measure the land itself, so a lake or reservoir
+  // downstream is beside the point and the unit takes its value like any other.
+  const landReading = mode==="subbasin" && (subBy==="volume" || subBy==="gain");
+  // The demand view's subject is downstream exposure, so every upstream
+  // watershed is held back uniformly there, barriers and lake catchments
+  // included. A tint marking where water stops belongs to the lenses that read
+  // the upstream land, not to the one reading the floodplain.
+  const demandView = mode==="ledger" && ledgerView==="demand";
+  // The Community lens opens the map, and its subject is which watersheds
+  // contribute to the community picked. A tint for water bodies that intercept
+  // flow answers a question this lens does not raise, so those watersheds are
+  // held back with the rest of the land here and explained on hover instead.
+  const cityLens = mode==="city" || mode==="compare";
+  // The subject is the downstream communities of the Metro Vancouver and Fraser
+  // Valley regional districts, so an area is shaded by delivered contribution
+  // only where it drains toward at least one of them (n_contrib > 0). The rest
+  // are held faint, so a dark shade never reads as important for an area that
+  // reaches no focus community.
+  const contribFocus=(p.n_contrib||0)>0;
+  // With the dimming option on, reaching no focus community is the whole point
+  // of the shade, so it beats the lake and reservoir tint. Otherwise the two
+  // largest dimmed groups would still be the brightest thing on the map.
+  const dimmed = focusOnly && subBy==="gain" && !contribFocus;
+  // Barrier units are land watersheds holding a terminal water body. They still
+  // retain runoff, it just buffers that water body rather than flowing on, so
+  // in the lenses that ask who is downstream they take a warm neutral rather
+  // than the blank white that read as unimportant. The LAKES overlay draws the
+  // water body itself and the hover tooltip explains the severing.
+  if(p.barrier && !landReading && !demandView && !dimmed && !cityLens)
+    return {fillColor:BARRIER_FILL,fillOpacity:on?0.7:0,weight:1.4,
+            color:"#8a7f68",opacity:0.95,dashArray:"4 3"};
+  let fill=FAINT,fo=on?0.5:0,w=0.4,col="#a9b8c8",dash=null;
+  if(mode==="ledger"){
+    if(ledgerView==="supply"){
+      // retention delivered, weighted by the exposure it reaches
+      const s=regionScore[p.id]||0;
+      fill=s>0?volColor(s/MAX_SCORE*MAX_VOL):FAINT; fo=on?(s>0?0.85:0.18):0;
+    } else {
+      // demand side: the upstream land is not the subject, so hold it right back
+      fill=FAINT; fo=on?0.12:0; w=0.3; col="#c2cdd9";
+    }
+  } else if(mode==="subbasin"){
+    // one lens, three readings of the same area (see subBy)
+    if(subBy==="count"){
+      fill=sharedColor(p.n_contrib); fo=on?0.85:0;
+    } else if(subBy==="gain"){
+      // What the cover is worth, stated as its absence: runoff from here would
+      // rise by this share if the natural land were stripped. Like the retention
+      // reading it is a property of the place, so every watershed is shaded.
+      if(dimmed){ fill=FAINT; fo=on?0.15:0.04; w=0.3; col="#bcc8d6"; }
+      else { fill=gainColor(p.runoff_gain_pct||0); fo=on?0.85:0.1; w=0.4; }
+    } else if(subBy==="distance"){
+      const d=distNearest[p.id];
+      if(d!=null){ fill=distColor(d); fo=on?0.85:0.12; w=0.4; }
+      else { fill=FAINT; fo=on?0.15:0.04; w=0.3; col="#bcc8d6"; }
+    } else {
+      // Retention depth (mm per km² of natural land): what the ecosystem holds
+      // back, independent of watershed size and of anything downstream. Areas
+      // with no natural land left take the empty shade rather than the
+      // drains-away grey, which is what empty means here.
+      const mm=p.retain_mm||0;
+      if(dimmed){ fill=FAINT; fo=on?0.15:0.04; w=0.3; col="#bcc8d6"; }
+      else { fill=depthColor(mm); fo=on?(mm>0?0.85:0.35):0.1; w=0.4; }
+    }
+  } else if(mode==="city"){
+    if(!selCity){ fill=FAINT; fo=on?0.4:0; }
+    else { // shade by attenuation DELIVERED to the selected community (decayed),
+           // so the same area is paler for a far community than a near one
+      const dv=deliverTo(selCity,p.id);
+      if(dv>0){ fill=cityColor(dv); fo=on?0.92:0.15; w=0.5; }
+      else { fill=FAINT; fo=on?0.18:0; } }
+  } else if(mode==="compare"){
+    if(cityA==null||cityB==null){ fill=FAINT; fo=on?0.38:0; }
+    else{ const a=g&&g.contributes.includes(cityA),b=g&&g.contributes.includes(cityB),nat=p.natural_km2>0;
+      if(a&&b&&nat){ fill=C_GOLD; fo=on?0.92:0.2; w=0.6; col="#7a5b00"; }
+      else if(a&&nat){ fill=C_BLUE; fo=on?0.58:0; }
+      else if(b&&nat){ fill=C_ORANGE; fo=on?0.58:0; }
+      else { fill=FAINT; fo=on?0.15:0; } }
+  }
+  // Lake catchments: an uncredited basin ending in a severed lake or reservoir
+  // is tinted like its barrier unit, so Pitt, Stave and Harrison country reads
+  // as buffering the lake rather than as a hole in the map.
+  if(!contribFocus && buffersLake[p.id] && !demandView && !dimmed && !cityLens
+     && (fill===FAINT || fill===SHARED_BINS[0].c)){
+    fill=BARRIER_FILL;
+    if(on) fo=Math.max(fo,0.5);
+  }
+  /* Seam stroke: a shaded watershed's outline is painted in its own fill
+     colour. The FWA coverage does not close perfectly, about 5,400 sub-metre
+     slivers running along shared edges, and those render as white hairlines.
+     Both neighbours painting outward across the crack in their own shade covers
+     them without adding a border line; boundaries still read wherever two
+     watersheds differ in value, the only place a boundary carries information
+     here. Unfilled areas (fo = 0) keep the plain outline, and barrier units
+     keep their dashed blue edge, which is a label rather than a border. */
+  // Ledger selection: one dark edge on the picked area, so the reader can see
+  // which row they are reading without the tab changing under them.
+  if(mode==="ledger"&&ledgerSel&&ledgerSel.t==="area"&&ledgerSel.id===p.id)
+    return {fillColor:fill,fillOpacity:Math.max(fo,0.9),weight:2.2,color:"#0d2030",opacity:0.95};
+  const seam = fo > 0 && !dash;
+  return {fillColor:fill, fillOpacity:fo,
+          weight: seam ? 0.9 : w,
+          color: seam ? fill : col,
+          opacity: seam ? fo : (on ? 0.9 : 0),
+          dashArray: dash};
+}
+function styleAll(){
+  subLayer.eachLayer(l=>l.setStyle(styleSub(l.feature.properties)));
+  muniLayer.eachLayer(l=>{const s=styleMuni(l.feature.properties);l.setStyle(s);if(s.fillOpacity>0)l.bringToFront();});
+  // In the neighbourhood read an exposed community hands its fill to the DA
+  // layer and keeps only its boundary, while a community the floodplain misses
+  // keeps a fill. Drawn in that order the fill covers the boundary along every
+  // edge the two share, so the outline reads as broken. Draw the boundaries
+  // last: thin, unbroken, and over everything they border.
+  if(daReadActive()) muniLayer.eachLayer(l=>{
+    const id=l.feature.properties.muni_id;
+    if((daByMuni[id]||[]).some(k=>daDemand[k]>0)) l.bringToFront(); });
+  if(daBgLayer) daBgLayer.eachLayer(l=>l.setStyle(styleDaBg(l.feature.properties)));
+  if(daLayer){ if(!daReadActive()) hoveredDa=null;
+    daLayer.eachLayer(l=>l.setStyle(styleDA(l.feature.properties))); }
+  // Seam strokes are drawn in paint order, so lift the picked area or
+  // neighbourhood clear of the neighbours that would otherwise paint over its edge.
+  liftSelection();
+  markPicked();   // after the lift, so the mark sits over its neighbours and not under them
+  // Pointer gating, set inline on each path: Leaflet's .leaflet-interactive
+  // class sets pointer-events on the path itself, so a pane-level CSS rule
+  // loses to it.
+  //
+  // In the land lenses (ecosystems, and supply, which also shades upstream
+  // areas) the administrative layers must not take the pointer. The DA layer
+  // has to be gated with them: it covers every populated part of the map, its
+  // pane sits above the areas pane, and a path with fillOpacity 0 still takes
+  // the pointer. Only the demand view keeps communities and neighbourhoods
+  // clickable.
+  //
+  // The neighbourhood read runs the same trap the other way. The munis pane
+  // sits above the das pane, so a community that has handed its fill to the DA
+  // layer is still a transparent polygon over it. Those communities are gated
+  // off one by one; a community with no exposed DA of its own keeps its fill,
+  // and the pointer with it.
+  const landLens = (mode==="subbasin") || (mode==="ledger" && ledgerView==="supply");
+  const daRead = daReadActive();
+  const gate=(lyr,off)=>{ if(!lyr) return; lyr.eachLayer(l=>{
+    const el=l.getElement&&l.getElement(); if(el) el.style.pointerEvents=off(l)?"none":""; }); };
+  gate(muniLayer,l=>landLens ||
+    (daRead && (daByMuni[l.feature.properties.muni_id]||[]).some(k=>daDemand[k]>0)));
+  gate(fnLayer,()=>landLens); gate(daLayer,()=>landLens);
+  updateLabels();
+}
+// Faint orientation labels for context, plus the selected community's name as
+// a chip. Every other community name appears on hover.
+function updateLabels(){
+  const show=document.getElementById("tg-label").checked;
+  applyGeoLabels();   // geo/orientation labels: toggle + zoom-gated
+  // The selected chip is anchored above the community's northern boundary, so
+  // the name never covers the area it names; hover chips stay on the centroid.
+  Object.keys(muniLabel).forEach(k=>{ const id=+k, tt=muniLabel[id];
+    const sel=(mode==="city"&&id===selCity)||(mode==="compare"&&(id===cityA||id===cityB));
+    if(show&&sel){
+      tt.options.direction="top";
+      tt.setLatLng([muniLyr[id].getBounds().getNorth(), muniCentroid[id].cx]);
+      map.addLayer(tt); const el=tt.getElement&&tt.getElement(); if(el) el.classList.toggle("sel",true);
+    } else {
+      map.removeLayer(tt);
+      tt.options.direction="center";
+      tt.setLatLng([muniCentroid[id].cy, muniCentroid[id].cx]);
+    }
+  });
+}
+
+/* ============================================================================
+   Flow: full upstream drainage network converging into a community
+============================================================================ */
+// Persistent drainage hydrography: the BC Freshwater Atlas stream network
+// (STREAMS, order >= 4), drawn in the 'rivers' pane above the polygons so
+// shading cannot bury it, and widened by stream order. A synthetic Catmull-Rom
+// skeleton through sub-basin centroids is the fallback when a build lacks
+// STREAMS; it fans radially at confluences, which reads as false density.
+function pt(id){ return [featById[id].cy,featById[id].cx]; }   // function decl: hoisted, so buildRivers() can call it at init
+function mainUp(id){ const us=upOf[id]; if(!us||!us.length) return null;
+  return us.reduce((a,b)=>(featById[b].n_up||0)>(featById[a].n_up||0)?b:a); }
+// Centripetal Catmull-Rom (alpha 0.5): knot spacing scales with sqrt(distance),
+// so no cusps or loops form where a downstream pour-point is laterally offset
+// from the reach. Barry-Goldman pyramidal evaluation; falls back to a straight
+// segment if points coincide.
+function catmull(p0,p1,p2,p3,n){
+  const knot=(t,a,b)=>t+Math.pow(Math.hypot(b[0]-a[0],b[1]-a[1]),0.5);
+  const t0=0,t1=knot(t0,p0,p1),t2=knot(t1,p1,p2),t3=knot(t2,p2,p3);
+  if(!(t2>t1)||!(t1>t0)||!(t3>t2)) return [p1,p2];   // coincident points → linear
+  const lp=(a,b,ta,tb,t)=>{const k=(t-ta)/(tb-ta);return [a[0]+(b[0]-a[0])*k,a[1]+(b[1]-a[1])*k];};
+  const out=[];
+  for(let s=0;s<=n;s++){
+    const t=t1+(t2-t1)*s/n;
+    const A1=lp(p0,p1,t0,t1,t),A2=lp(p1,p2,t1,t2,t),A3=lp(p2,p3,t2,t3,t);
+    const B1=lp(A1,A2,t0,t2,t),B2=lp(A2,A3,t1,t3,t);
+    out.push(lp(B1,B2,t1,t2,t));
+  }
+  return out; }
+// Stream width: a base from Strahler order, scaled by zoom so the network reads
+// as fine threads at the whole-domain view and thickens toward a community.
+// 1x at z10, about two thirds at z9, about 0.45 at z8.
+function streamWeight(ord){
+  const base=Math.max(0.4,Math.min(2.8,(ord-2)*0.5));
+  const scale=Math.max(0.35,Math.min(2.2,Math.pow(1.5,map.getZoom()-10)));
+  return Math.max(0.35,base*scale);
+}
+function restyleStreams(){ streamLayers.forEach(o=>o.layer.setStyle({weight:streamWeight(o.ord)})); }
+function buildRivers(){
+  riverGroup.clearLayers(); streamLayers=[];
+  if(!document.getElementById("tg-river")?.checked) return;
+  // Real FWA stream centrelines, widened by stream order (order 4 is a
+  // tributary like the Alouette, order 7 the Fraser trunk). Dissolved per order
+  // class upstream; width also scales with zoom (streamWeight).
+  if(typeof STREAMS!=="undefined" && STREAMS.features && STREAMS.features.length){
+    STREAMS.features.forEach(f=>{
+      const ord=f.properties.order||3;
+      const lyr=L.geoJSON(f,{pane:"rivers",interactive:false,
+        style:{color:"#5b93c4",weight:streamWeight(ord),opacity:0.55,lineCap:"round",lineJoin:"round",smoothFactor:1}}).addTo(riverGroup);
+      streamLayers.push({layer:lyr,ord});
+    });
+    return;
+  }
+  // FALLBACK: synthetic centroid-spline skeleton (used only when the real stream
+  // pull was unavailable at build time, so the map still shows connectivity).
+  SUBBASINS.features.forEach(f=>{
+    const p=f.properties; if(!p.next_id) return; const q=featById[p.next_id]; if(!q) return;
+    const P1=pt(p.id), P2=pt(p.next_id);
+    const up=mainUp(p.id), P0=up?pt(up):[2*P1[0]-P2[0],2*P1[1]-P2[1]];           // extrapolate if headwater
+    const P3=(q.next_id&&featById[q.next_id])?pt(q.next_id):[2*P2[0]-P1[0],2*P2[1]-P1[1]]; // ...or if outlet
+    const w=0.5+Math.min(3.4,Math.sqrt(q.n_up||0)/3.6);   // Shreve-ish taper
+    L.polyline(catmull(P0,P1,P2,P3,w>1.5?8:3),
+      {pane:"rivers",color:"#5b93c4",weight:w,opacity:0.5,lineCap:"round",lineJoin:"round",smoothFactor:1}).addTo(riverGroup);
+  });
+}
+// Community-selection cascade: animated dashes along the real stream channels
+// (STREAMS) inside the contributing area, so the flow follows valleys through
+// the watersheds.
+//
+// Once, lazily and cached: chop every stream line into segments and assign each
+// to the sub-basin containing its midpoint, with a bbox prefilter ahead of the
+// point-in-polygon test. Per selection: keep the segments whose basin
+// contributes to the community and stitch consecutive keepers back into
+// polylines.
+let segAssign=null;
+function assignStreams(){
+  if(segAssign) return segAssign;
+  segAssign=[];
+  const boxes=SUBBASINS.features.map(f=>{
+    let x1=1e9,y1=1e9,x2=-1e9,y2=-1e9;
+    const polys=f.geometry.type==="Polygon"?[f.geometry.coordinates]:f.geometry.type==="MultiPolygon"?f.geometry.coordinates:[];
+    polys.forEach(p=>p[0]&&p[0].forEach(c=>{ if(c[0]<x1)x1=c[0]; if(c[0]>x2)x2=c[0]; if(c[1]<y1)y1=c[1]; if(c[1]>y2)y2=c[1]; }));
+    return {f,x1,y1,x2,y2};
+  });
+  const at=(lng,lat)=>{
+    for(const b of boxes){
+      if(lng<b.x1||lng>b.x2||lat<b.y1||lat>b.y2) continue;
+      const g=b.f.geometry, polys=g.type==="Polygon"?[g.coordinates]:g.coordinates;
+      for(const p of polys){ if(p.length&&ringContains(p[0],lng,lat)) return b.f.properties.id; }
+    }
+    return null;
+  };
+  STREAMS.features.forEach(f=>{
+    const ord=f.properties.order||4;
+    const lines=f.geometry.type==="LineString"?[f.geometry.coordinates]:f.geometry.coordinates;
+    lines.forEach(cs=>{ for(let i=0;i<cs.length-1;i++){
+      segAssign.push({a:cs[i],b:cs[i+1],ord,
+        id:at((cs[i][0]+cs[i+1][0])/2,(cs[i][1]+cs[i+1][1])/2)});
+    } });
+  });
+  return segAssign;
+}
+function drawNetwork(muniId){
+  flowGroup.clearLayers();
+  const ids=new Set([...(providersOfMuni[muniId]||[]), ...(MUNI_BASINS[muniId]||[])]);
+  if(typeof STREAMS!=="undefined" && STREAMS.features && STREAMS.features.length){
+    // The shipped stream parts are fragmented, mostly one segment each, so
+    // chain the kept segments back into channels by shared endpoints and draw
+    // one multi-polyline per order class: a handful of SVG paths, not thousands.
+    // One cascade, one colour, so the whole contributing channel network reads
+    // as a single thing arriving.
+    const kept=assignStreams().filter(s=>s.id&&ids.has(s.id));
+    const kc=c=>c[0]+","+c[1];
+    const byGrp={};
+    kept.forEach(s=>{ (byGrp[s.ord]=byGrp[s.ord]||[]).push(s); });
+    Object.keys(byGrp).sort().forEach(grp=>{
+      const ord=+grp;
+      const segs=byGrp[grp], byStart={}, hasIncoming=new Set(), used=new Set(), chains=[];
+      segs.forEach(s=>{ (byStart[kc(s.a)]=byStart[kc(s.a)]||[]).push(s); hasIncoming.add(kc(s.b)); });
+      const walk=s0=>{ used.add(s0);
+        const ptsArr=[s0.a,s0.b]; let curKey=kc(s0.b), lastId=s0.id;
+        for(;;){ const nx=(byStart[curKey]||[]).find(x=>!used.has(x)); if(!nx) break;
+          used.add(nx); ptsArr.push(nx.b); curKey=kc(nx.b); lastId=nx.id; }
+        return {ptsArr,firstId:s0.id,lastId}; };
+      segs.forEach(s=>{ if(!used.has(s)&&!hasIncoming.has(kc(s.a))) chains.push(walk(s)); });
+      segs.forEach(s=>{ if(!used.has(s)) chains.push(walk(s)); });   // loops and any segment not yet chained
+      // No orientation step: 99_interactive_map.R stores every stream part in
+      // downstream order, decided by sampling the DEM at both ends, so chains
+      // walked by shared endpoints already run with the water and the dash
+      // animation follows.
+      const latlngs=chains.map(c=>c.ptsArr.map(q=>[q[1],q[0]]));
+      if(!latlngs.length) return;
+      const w=Math.max(0.9,(ord-3)*0.8);
+      L.polyline(latlngs,{pane:"flow",color:"#0d3a5a",weight:w+1.6,
+        opacity:0.15,lineJoin:"round",interactive:false}).addTo(flowGroup);
+      L.polyline(latlngs,{pane:"flow",className:"flow-line",color:"#1d9bd1",
+        weight:w,opacity:0.9,dashArray:"8 12",lineCap:"round",lineJoin:"round",interactive:false}).addTo(flowGroup);
+    });
+    return;
+  }
+  // FALLBACK (no STREAMS in the build): the synthetic centroid spline network
+  ids.forEach(id=>{
+    const p=featById[id]; if(!p||!p.next_id||!ids.has(p.next_id)) return;
+    const q=featById[p.next_id];
+    const P1=pt(id),P2=pt(p.next_id);
+    const up=mainUp(id),P0=up?pt(up):[2*P1[0]-P2[0],2*P1[1]-P2[1]];
+    const P3=(q.next_id&&featById[q.next_id])?pt(q.next_id):[2*P2[0]-P1[0],2*P2[1]-P1[1]];
+    const w=0.8+Math.min(4.2,Math.sqrt(q.n_up||0)/3.2);
+    L.polyline(catmull(P0,P1,P2,P3,6),{pane:"flow",className:"flow-line",color:"#1d9bd1",
+      weight:w,opacity:0.9,dashArray:"8 12",lineCap:"round",lineJoin:"round",interactive:false}).addTo(flowGroup);
+  });
+}
+// Glowing flow path: the chain of sub-basins a clicked area drains through.
+// computeFlowChain walks the next_id graph to the outlet, or to a severed sink
+// (the Stave/Hayward reservoir, say) where the chain ends; styleSub paints the
+// members, and applyFlowGlow staggers each pulse so the glow ripples downstream.
+function computeFlowChain(id){
+  flowChain=[]; let cur=id,g=0;
+  while(cur&&featById[cur]&&g++<400){ flowChain.push(cur); cur=featById[cur].next_id; }
+  flowChainSet=new Set(flowChain);
+}
+function applyFlowGlow(){
+  // classes go on via classList (Leaflet's setStyle does not apply className on update)
+  flowChain.forEach((cid,i)=>{ const l=subById[cid]; if(!l||!l._path) return;
+    l.bringToFront();                                  // sit above the other shaded areas
+    l._path.classList.add("glow-basin");
+    if(cid===chainSource()) l._path.classList.add("glow-source");
+    l._path.style.animationDelay=(i*0.13)+"s"; });     // downstream ripple = flow direction
+  liftSelection();   // the raise above leaves the outlet on top, over the clicked area's own edge
+}
+function clearFlowGlow(){
+  flowChain.forEach(cid=>{ const el=subById[cid]&&subById[cid]._path;
+    if(el){ el.classList.remove("glow-basin","glow-source"); el.style.animationDelay=""; } });
+  flowChain=[]; flowChainSet=new Set();
+}
+
+/* ============================================================================
+   Interactions
+============================================================================ */
+// Community lens: stays on the "city" chip, but flips to the internal
+// "compare" mode (gold = areas contributing to both) once a 2nd community is chosen.
+// Rebuilds tabs/controls/styles/panel from current state in one place.
+function applyMuniMode(){
+  selSub=null; clearFlowGlow(); flowGroup.clearLayers();
+  unhover();   // the watersheds go inert here, and an inert path never fires the mouseout that would clear its outline
+  mode = (selCity!=null && cmpCity!=null) ? "compare" : "city";
+  cityA=selCity; cityB=cmpCity;
+  buildTabs(); renderControls();
+  if(mode==="city" && selCity) drawNetwork(selCity);
+  styleAll(); renderPanel(); updateLensBanner(); fitForMode();
+}
+function onAreaClick(id){
+  // in the ledger a click picks the area in place, without changing tab
+  if(mode==="ledger"){ selectInLedger("area",id); return; }
+  // elsewhere an area click focuses the Upstream ecosystems lens on it, as a
+  // community click focuses the Community lens
+  if(mode!=="subbasin"){ mode="subbasin"; buildTabs(); renderControls(); }
+  clearFlowGlow(); flowGroup.clearLayers();
+  selSub=id; computeFlowChain(id);
+  styleAll(); applyFlowGlow(); renderPanel(); updateLensBanner();
+}
+function onMuniClick(id){
+  if(mode==="ledger") return;   // neither side of the ledger is read on a community
+  // a community click always focuses the Community lens on it (and, if a
+  // comparison is active, updates the first slot)
+  selCity=id; applyMuniMode();
+}
+// One selection, held inside the ledger: no tab change, no reframe. A pick only
+// counts if it belongs to the side being read (communities and neighbourhoods
+// on demand, upstream areas on supply), so a click falling through to the layer
+// underneath cannot select something the panel has no card for.
+function selectInLedger(t,id){
+  const ok = ledgerView==="demand" ? (t==="da") : (t==="area");
+  if(!ok) return;
+  ledgerSel={t,id}; traceDelivery(); styleAll(); applyFlowGlow(); renderPanel();
+}
+function clearLedgerSel(){ ledgerSel=null; traceDelivery(); styleAll(); renderPanel(); }
+// Where a picked watershed's retention goes. The supply side measures retention
+// DELIVERED downstream, so the click traces the route it takes: the chain of
+// watersheds its water drains through on the way to the communities it serves,
+// glowing from the source down. The ecosystems lens draws the same trace, and
+// this is the side of the ledger that is actually about delivery.
+function traceDelivery(){
+  clearFlowGlow(); flowGroup.clearLayers();
+  if(mode!=="ledger"||ledgerView!=="supply") return;
+  if(!ledgerSel||ledgerSel.t!=="area") return;
+  computeFlowChain(ledgerSel.id);
+}
+// The glowing chain's source: whichever pick drew it in this lens.
+function chainSource(){
+  return mode==="ledger" ? (ledgerSel&&ledgerSel.t==="area"?ledgerSel.id:null) : selSub;
+}
+// Pick a neighbourhood from the ranked list: exactly the selection a map click
+// makes, and nothing else. It used to fly the map to the neighbourhood, on the
+// grounds that a row carries a name and no location, but the picked shape now
+// stands out well enough to find without being flown to, and holding the view
+// still keeps the reader's place in the map they were already reading.
+function pickDa(id){ selectInLedger("da",id); }
+// jump straight to a two-community comparison (the ranked pair lists use this)
+function openPair(a,b){ selCity=a; cmpCity=b; cmpOpen=true; applyMuniMode(); }
+
+/* ============================================================================
+   Panel (concise, progressive)
+============================================================================ */
+function aggregate(ids){let v=0,a=0;ids.forEach(id=>{const p=featById[id];v+=p.retain_m3||0;a+=p.natural_km2||0;});return{v,a,n:ids.length};}
+const rampCss=fn=>`linear-gradient(to right,${[0,.25,.5,.75,1].map(t=>fn(t)).join(",")})`;
+// fn: the ramp the caller's map is painted with (blue cityColor in the
+// Community lens, green volColor on the supply side).
+function legendVol(extra,fn=volColor){return `<div class="mini-legend"><div class="ramp" style="background:${rampCss(t=>fn(t*MAX_VOL))}"></div>
+  <div class="scale"><span>0</span><span>${vol3(MAX_VOL)} retained</span></div>
+  ${extra||""}</div>`;}
+
+// Legend for the Upstream ecosystems lens: whichever quantity the shading currently
+// carries. One lens, three readings, so the key has to follow the control.
+function legendForSub(){
+  if(subBy==="count") return `<div class="mini-legend">${SHARED_BINS.map(b=>`<div class="row"><span class="sw" style="background:${b.c}"></span>${b.l==="none"?"no communities":`${b.l} communit${b.l==="1"?"y":"ies"}`}</div>`).join("")}
+    <div class="row"><span class="sw" style="background:${BARRIER_FILL};border-color:#8a7f68"></span>drains into a lake or reservoir</div></div>`;
+  if(subBy==="gain") return `<div class="mini-legend"><div class="ramp" style="background:${rampCss(t=>gainColor(t*t*MAX_GAIN))}"></div>
+    <div class="scale"><span>no change</span><span>${MAX_GAIN}% or more</span></div>
+    ${focusRow()}</div>`;
+  if(subBy==="distance"){
+    const ds=Object.values(distNearest).filter(d=>d!=null&&isFinite(d));
+    const dmax=ds.length?Math.round(Math.max(...ds)):0;
+    return `<div class="mini-legend"><div class="ramp" style="background:linear-gradient(to right,${DIST_COLS.map(c=>"rgb("+c.join(",")+")").join(",")})"></div>
+    <div class="scale"><span>0 km</span><span>${dmax} km to the nearest community</span></div>
+    <div class="row" style="margin-top:8px"><span class="sw" style="background:${BARRIER_FILL};border-color:#8a7f68"></span>drains into a lake or reservoir</div>
+    <div class="row"><span class="sw" style="background:${FAINT}"></span>reaches no focus community</div></div>`;
+  }
+  // Retention depth: the ramp alone. This reading does not ask where the water
+  // goes, so no drains-away or lake category, and every watershed in the build
+  // retains something, so no empty category. depthColor's zero shade is a guard.
+  return `<div class="mini-legend"><div class="ramp" style="background:${rampCss(t=>depthColor(t*MAX_MM))}"></div>
+    <div class="scale"><span>0 mm</span><span>${Math.round(MAX_MM)} mm retained</span></div></div>`;
+}
+const focusRow=()=>(focusOnly&&subBy==="gain")
+  ? `<div class="row" style="margin-top:8px"><span class="sw" style="background:${FAINT}"></span>does not reach the Lower Fraser</div>` : "";
+
+// The picked neighbourhood's card, at the top of the panel. Deliberately
+// smaller and warmer than the region card under it: at equal weight the two
+// read as competing answers to "what am I looking at", when one names the
+// neighbourhood picked and the other describes the whole region. It was tried
+// as a map popup, which put the figures where the place is but covered the
+// ground being read, so it came back here in a form that cannot be mistaken
+// for the region's own card.
+function daCard(id){
+  const d=DA_DEMAND[id]; if(!d) return "";
+  const a=daArea(id), share=d.km2>0?100*a/d.km2:0;
+  const ranked=Object.keys(daDemand).filter(x=>daDemand[x]>0);
+  const rank=ranked.sort((x,y)=>daDemand[y]-daDemand[x]).indexOf(id)+1;
+  // the same components the region's composition bar uses, so a neighbourhood
+  // is read in the units the whole view is built from
+  const parts=[{k:"built",l:"Built-up",c:COMP_COL.built},
+               {k:"crops",l:"Cropland",c:COMP_COL.crops}].filter(x=>(d[x.k]||0)>0);
+  const tot=parts.reduce((t,x)=>t+d[x.k],0)||1;
+  const bar=parts.map(x=>`<span style="width:${Math.max(1,Math.round(100*d[x.k]/tot))}%;background:${x.c}"></span>`).join("");
+  const key=parts.map(x=>`<span><i style="background:${x.c}"></i>${x.l} ${d[x.k]<0.01?"<0.01":d[x.k].toFixed(2)} km²</span>`).join("");
+  return `<div class="sel-card">
+    <div class="lab">Selected neighbourhood
+      <button onclick="clearLedgerSel()" title="Clear selection" aria-label="Clear selection">&times;</button></div>
+    <div class="nm">${muniName(d.muni)}<span class="da">DA ${id}</span></div>
+    <div class="fig"><b>${a<0.01?"<0.01":a.toFixed(2)}</b> km² exposed, ${share<1?"under 1":Math.round(share)}% of the area</div>
+    <div class="meta">Rank ${rank||"–"} of ${ranked.length} &middot; ${(d.pop||0).toLocaleString()} residents</div>
+    ${parts.length?`<div class="comp-bar">${bar}</div><div class="ckey">${key}</div>`:""}
+    ${(d.fac||0)>0?`<p class="tip">Holds a school or hospital within 250 m of the floodplain.</p>`:""}
+  </div>`;
+}
+
+
+// Side panel for the active lens and its selection.
+function renderPanel(){
+  const el=document.getElementById("panel");
+  if(mode==="city"){
+    if(!selCity){
+      // First-open panel: the largest shared contributions, as clickable pairs.
+      // Ranked by jointly delivered volume rather than directional dependency,
+      // which saturates at 100% for a small community nested inside a
+      // neighbour's portfolio and so buries the big stakes.
+      const topPairs=Object.keys(sharedVol).map(k=>{ const [a,b]=k.split("|").map(Number);
+          return {a,b,v:sharedVol[k],s:similarity(a,b)}; })
+        .sort((x,y)=>y.v-x.v).slice(0,3);
+      const maxV=topPairs.length?topPairs[0].v:1;
+      const pairs=topPairs.map(x=>
+        `<div class="share-row" style="cursor:pointer" onclick="openPair(${x.a},${x.b})"><span class="bar" style="width:${Math.round(100*x.v/maxV)}%"></span><span class="nm">${muniName(x.a)} &amp; ${muniName(x.b)}</span><span class="pc">${Math.round(x.s*100)}%</span></div>`).join("");
+      el.innerHTML=`<div class="mini-legend" style="margin-top:2px">
+          <div class="row"><span class="sw" style="background:${RD_TINT.MVRD.fill};border-color:${RD_TINT.MVRD.line}"></span>Metro Vancouver</div>
+          <div class="row"><span class="sw" style="background:${RD_TINT.FVRD.fill};border-color:${RD_TINT.FVRD.line}"></span>Fraser Valley</div>
+        </div>
+        ${pairs?`<div class="card" style="margin-top:10px"><p class="sub2" style="margin:0">Largest shared upstream contribution</p><div class="share-list">${pairs}</div><p class="tip" style="margin-top:8px">Percentages are the overlap in the contribution each receives, after distance decay. Select a pair to compare.</p></div>`:""}
+        <div class="next-step eco" onclick="setMode('subbasin')">See the upstream ecosystems these communities rely on <span class="arw">&rsaquo;</span></div>`;
+      return; }
+    // No modelled exposure: the flood model covers the Fraser freshet corridor,
+    // so a community with no delivered contribution has no mapped Fraser flood
+    // exposure. Say that plainly rather than show a rank that would carry none.
+    if(!((provVol[selCity]||0)>0)){
+      el.innerHTML=`<div class="card">
+        <h3>${muniName(selCity)}</h3><p class="sub2">${muniTag(selCity)}</p>
+        <div class="callout none" style="margin-top:12px">This community has no mapped exposure in the modelled Fraser River freshet floodplain, so no upstream contribution is credited to it here. Local flooding from other sources (coastal, creeks) is outside this model. See <b>Method &amp; limitations</b>, bottom right of the map.</div>
+        <button class="btn-clear" onclick="resetApp()">Back to the community picker</button>
+      </div>`;
+      return; }
+    const ids=providersOfMuni[selCity]||[]; const s=aggregate(ids);
+    // rank neighbours by Jaccard similarity of decay-weighted contribution portfolios
+    const partners=MUNIS.features.map(f=>f.properties.muni_id)
+      .filter(id=>id!==selCity && (muniMeta[id]||{}).type!=="Reserve")
+      .map(id=>({id,d:similarity(selCity,id)})).filter(x=>x.d>0.01).sort((a,b)=>b.d-a.d);
+    // centre of the card: what does the attenuating, as natural cover types
+    // upstream (forest, shrubland, wetland) in km²
+    const top=partners[0], comp=natComp(ids);
+    // the percentage belongs to the pair, not to the neighbour on its own, so a
+    // click opens the comparison rather than replacing the selection
+    const list=partners.slice(0,5).map(pp=>`<div class="share-row" style="cursor:pointer" onclick="openPair(${selCity},${pp.id})"><span class="bar" style="width:${Math.round(pp.d*100)}%"></span><span class="nm">${muniName(pp.id)}</span><span class="pc">${Math.round(pp.d*100)}%</span></div>`).join("");
+    el.innerHTML=`<div class="card">
+      <h3>${muniName(selCity)}</h3><p class="sub2">${muniTag(selCity)}</p>
+      <p class="sub2" style="margin:13px 0 6px">Upstream contributing land</p>
+      ${comp?compHtml(comp):`<div class="big" style="margin:0"><span class="n">${km2(s.a)}</span><span class="u">of natural land</span></div>`}
+      <div class="stat-row">
+        <div><div class="k">Upstream watersheds</div><div class="v">${s.n}</div></div>
+        <div><div class="k">Natural land</div><div class="v">${km2(s.a)}</div></div>
+      </div>
+      ${boundaryNote(selCity)}
+      ${top?`<div class="callout">Shares most upstream contribution with <b>${muniName(top.id)}</b> (<b>${Math.round(top.d*100)}%</b>).</div>`:`<div class="callout none">Draws mostly on upstream land it does not share with neighbours.</div>`}
+      ${list?`<p class="sub2" style="margin:13px 0 0">Shares upstream contribution with</p><div class="share-list">${list}</div>`:""}
+      ${legendVol(null,cityColor)}
+    </div>
+    <div class="next-step eco" onclick="setMode('subbasin')">Open the upstream areas that supply it <span class="arw">&rsaquo;</span></div>`;
+  }
+  else if(mode==="compare"){
+    if(cityA==null||cityB==null){ el.innerHTML=`<div class="empty">Select a <b style="color:${C_BLUE}">first</b> and <b style="color:${C_ORANGE}">second</b> community. Areas upstream of <b style="color:${C_GOLD}">both</b> are shown in gold.</div>`; return; }
+    // Decay-weighted shared contribution, as in the Community lens: jointly
+    // delivered volume, Jaccard overlap, and each community's dependency on the
+    // shared land. Summing each shared area's full retention would inflate it.
+    const sv=sharedVolOf(cityA,cityB), jac=Math.round(similarity(cityA,cityB)*100);
+    const depAB=Math.round(dependency(cityA,cityB)*100), depBA=Math.round(dependency(cityB,cityA)*100);
+    const nBoth=[...new Set(providersOfMuni[cityA]||[])].filter(x=>(providersOfMuni[cityB]||[]).includes(x)).length;
+    el.innerHTML=`<div class="card">
+      <h3>${muniName(cityA)} &amp; ${muniName(cityB)}</h3><p class="sub2">Shared upstream contribution</p>
+      <div class="big"><span class="n">${jac}%</span><span class="u">overlap in the contribution<br>each receives<br><span style="font-size:10px">distance weighted</span></span></div>
+      <div class="stat-row">
+        <div><div class="k">${muniName(cityA)} shares</div><div class="v">${depAB}%</div></div>
+        <div><div class="k">${muniName(cityB)} shares</div><div class="v">${depBA}%</div></div>
+      </div>
+      <div class="callout ${sv>0?"":"none"}">${sv>0?`<b>${depAB}%</b> of ${muniName(cityA)}’s and <b>${depBA}%</b> of ${muniName(cityB)}’s distance-weighted upstream contribution comes from the same ${nBoth} areas.${jac>=10?" Land-use decisions there affect both.":""}`
+        :nBoth>0?`They have ${nBoth} upstream watersheds in common, but none close enough to either for the shared ground to carry a contribution.`
+        :`These communities draw on largely different upstream areas.`}</div>
+      ${nBoth>0&&jac<10?`<p class="tip">Sharing land is not the same as sharing a contribution. These two have <b>${nBoth}</b> upstream watersheds in common, but a contribution halves every ${DECAY_HALFLIFE_KM} km of flow, so ground that is far from either community counts for little on both sides of the comparison.</p>`:""}
+      <div class="mini-legend">
+        <div class="row"><span class="sw" style="background:${C_GOLD}"></span>Upstream of both</div>
+        <div class="row"><span class="sw" style="background:${C_BLUE}"></span>${muniName(cityA)} only</div>
+        <div class="row"><span class="sw" style="background:${C_ORANGE}"></span>${muniName(cityB)} only</div>
+      </div>
+      <button class="btn-clear" onclick="resetApp()">Back to the community picker</button>
+    </div>`;
+  }
+  else if(mode==="subbasin"){
+    if(!selSub){
+      // Before anything is clicked, the panel offers the region's shared assets as
+      // shortcuts: the areas whose retention reaches several communities, ranked by
+      // the total they deliver. One click lands the reader on a concrete area.
+      const totDel={};
+      Object.keys(provList).forEach(j=>{ totDel[j]=provList[j].reduce((s,x)=>s+x[1],0); });
+      // one row per NAME (FWA repeats a stream's name across its units, and two
+      // "Pitt River" rows would read as a mistake): keep each name's top unit
+      const seen=new Set(), shared=[];
+      Object.keys(totDel).filter(j=>(featById[j].n_contrib||0)>1)
+        .sort((a,b)=>totDel[b]-totDel[a])
+        .forEach(j=>{ const nm=featById[j].name||"Unnamed area";
+          if(shared.length<6 && !seen.has(nm)){ seen.add(nm); shared.push(j); } });
+      const maxTot=shared.length?totDel[shared[0]]:1;
+      const assetList=shared.map(j=>{ const q=featById[j];
+        return `<div class="share-row" style="cursor:pointer" onclick="onAreaClick('${j}')"><span class="bar" style="width:${Math.round(100*totDel[j]/maxTot)}%"></span><span class="nm">${q.name||"Unnamed area"}</span><span class="pc">${q.n_contrib} communities</span></div>`; }).join("");
+      // each landing panel hands the reader on along the tab order
+      const nextCity=`<div class="next-step" onclick="setMode('ledger')">Compare supply and demand across the region <span class="arw">&rsaquo;</span></div>`;
+      el.innerHTML=(assetList?`<div class="card" style="margin-top:10px">
+        <p class="sub2" style="margin:0">Areas contributing to several communities</p>
+        <div class="share-list">${assetList}</div>
+        ${legendForSub()}
+      </div>`:`<div class="card">${legendForSub()}</div>`)+nextCity;
+      return; }
+    const p=featById[selSub], g=GRAPH[selSub]||{contributes:[]};
+    const contribs=(g.contributes||[]).map(m=>({m,d:deliverTo(m,selSub),km:(distTo[m]&&distTo[m][selSub])}))
+      .filter(x=>x.d>0).sort((a,b)=>b.d-a.d);
+    const maxd=contribs.length?contribs[0].d:0;
+    const list=contribs.slice(0,8).map(x=>
+      `<div class="share-row"><span class="bar" style="width:${maxd>0?Math.round(100*x.d/maxd):0}%"></span><span class="nm">${muniName(x.m)}</span><span class="pc">${x.km!=null?Math.round(x.km)+" km":""}</span></div>`
+    ).join("");
+    el.innerHTML=`<div class="card">
+      <h3>${p.name?p.name:"Upstream area"}</h3><p class="sub2">Natural land upstream</p>
+      ${/* The headline follows the reading the map is drawn on. Leading with the
+             counterfactual under every option made the retention reading say the
+             same thing as the one beside it, and said it about what would be lost
+             rather than what this watershed holds back as it stands. Whichever
+             figure is not the headline moves into the first stat cell, so both
+             stay on the card either way. */""}
+      ${subBy==="gain"
+        ? `<div class="big"><span class="n">${p.runoff_gain_pct||0}%</span><span class="u">more storm runoff from here<br>if this land's natural cover were lost</span></div>`
+        : `<div class="big"><span class="n">${Math.round(p.retain_mm||0)}</span><span class="u">mm of storm runoff held back<br>per km² of natural land</span></div>`}
+      <div class="stat-row">
+        ${subBy==="gain"
+          ? `<div><div class="k">Retains</div><div class="v">${Math.round(p.retain_mm||0)}<span class="uu">mm/km²</span></div></div>`
+          : `<div><div class="k">If cleared</div><div class="v">+${p.runoff_gain_pct||0}%<span class="uu">runoff</span></div></div>`}
+        <div><div class="k">Watershed total</div><div class="v">${vol3(p.retain_m3||0).replace(" million m³","<span class=\"uu\">M m³</span>").replace(" m³","<span class=\"uu\">m³</span>")}</div></div>
+        <div><div class="k">Natural area</div><div class="v">${km2(p.natural_km2||0).replace(" km²","<span class=\"uu\">km²</span>")}</div></div>
+      </div>
+      <div class="stat-row">
+        <div><div class="k">Communities reached</div><div class="v">${p.n_contrib||0}</div></div>
+        <div><div class="k">MVRD · FVRD</div><div class="v" style="font-size:15px">${p.n_contrib_mvrd||0} · ${p.n_contrib_fvrd||0}</div></div>
+      </div>
+      ${(c=>c?`<p class="sub2" style="margin:12px 0 6px">Natural land composition</p>${compHtml(c)}`:"")(natComp([selSub]))}
+      ${(p.n_contrib_mvrd>0&&p.n_contrib_fvrd>0)?`<div class="callout">Its outflow reaches communities in <b>both</b> regional districts.</div>`:""}
+      ${contribs.length?`<p class="sub2" style="margin:14px 0 0">Communities it contributes to</p><div class="share-list">${list}</div>
+        <p class="tip">The highlighted chain is the route this area's outflow takes. Bars are the share of its contribution reaching each community, which falls with flow distance.</p>`
+        :p.drains_south?`<div class="callout">This watershed drains south into Washington, not the Fraser, so its retention is not credited to Lower Fraser communities.</div>`
+        :p.barrier?`<div class="callout">This watershed drains into ${p.name?`the <b>${(p.barrier_type||"lake").toLowerCase()}</b> on ${p.name}`:`a <b>${(p.barrier_type||"lake").toLowerCase()}</b>`}. Its ${km2(p.natural_km2||0)} of natural land still retains runoff, but that retention buffers the water body${p.barrier_type==="Reservoir"?" (dam outflow is controlled)":""} rather than flowing on, so it is not credited to downstream communities.</div>`
+        :buffersLake[selSub]?`<div class="callout">This area's water drains to a <b>lake or reservoir</b> downstream. Its ${km2(p.natural_km2||0)} of natural land still retains runoff, but that retention buffers the water body rather than flowing on, so it is not credited to downstream communities.</div>`
+        :`<div class="callout none">This area's retained runoff is credited to no community. Its outflow drains past or away from every mapped area of flood exposure.</div>`}
+      ${legendForSub()}
+    </div>`;
+  }
+  else if(mode==="ledger"){
+    if(!hasMuniDemand){ el.innerHTML=`<div class="empty">Demand data is missing from this build, so the ledger cannot be drawn.</div>`; return; }
+    const {tot,all}=demandMixShares();
+    // every weight at zero: nothing counts as exposure, so both sides are empty.
+    // Say so plainly rather than rendering a card full of zeros.
+    if(all<=0){
+      el.innerHTML=`<div class="empty">Every exposure type is weighted 0, so no land downstream counts as exposed and neither side of the ledger can be drawn.
+        <br><br><a href="#" onclick="resetDemandMix();return false;">Reset to the model's weighting</a></div>`;
+      return; }
+    // how many communities carry exposure, for the headline only: the demand
+    // side no longer ranks them. Which community holds the most exposed land is
+    // a question about a jurisdiction, and the Community tab is where a
+    // jurisdiction is the subject.
+    const nExposed=MUNIS.features.map(f=>f.properties.muni_id)
+      .filter(m=>(muniDemandView[m]||0)>0).length;
+    // composition bar across the three exposure types
+    const compRows=DEMAND_PARTS.filter(p=>tot[p.k]>0);
+    const bar=compRows.map(p=>`<span style="width:${Math.max(1,Math.round(100*tot[p.k]/all))}%;background:${COMP_COL[p.k]}"></span>`).join("");
+    const key=compRows.map(p=>`<div class="row"><span class="sw" style="background:${COMP_COL[p.k]}"></span>${p.label}<span style="margin-left:auto;font-variant-numeric:tabular-nums">${all>0?(100*tot[p.k]/all).toFixed(0):0}%</span></div>`).join("");
+    // What the reader picked, in the terms of the side they are on: the land a
+    // neighbourhood carries, or the retention an upstream watershed supplies.
+    const selCard=(()=>{
+      if(!ledgerSel) return "";
+      if(ledgerView==="demand"&&ledgerSel.t==="da"&&hasDaData&&DA_DEMAND[ledgerSel.id])
+        return daCard(ledgerSel.id);
+      if(ledgerView==="supply"&&ledgerSel.t==="area"){
+        const q=featById[ledgerSel.id]; if(!q) return "";
+        return `<div class="card" style="margin-bottom:10px">
+          <h3>${q.name||"Unnamed area"}</h3><p class="sub2">Upstream watershed</p>
+          <div class="stat-row" style="border-top:0;padding-top:0">
+            <div><div class="k">Retains</div><div class="v">${(q.retain_mm||0).toFixed(1)} mm</div></div>
+            <div><div class="k">Communities reached</div><div class="v">${q.n_contrib||0}</div></div>
+          </div>
+          ${flowChain.length>1?`<p class="tip">The glowing chain on the map follows this water downstream through ${flowChain.length-1} watershed${flowChain.length===2?"":"s"} to its outlet. Delivery decays with that distance, which is why an area far up the chain counts for less than its retention alone suggests.</p>`
+            :`<p class="tip">This water reaches its outlet without passing through another watershed.</p>`}
+          <button class="btn-clear" onclick="clearLedgerSel()">Clear selection</button>
+        </div>`;
+      }
+      return "";
+    })();
+
+    if(ledgerView==="demand"){
+      // The ranking names the neighbourhoods carrying the most exposed land,
+      // with the community each sits in, so the reader can see where the risk
+      // concentrates without the map colouring a whole jurisdiction.
+      const byDa=hasDaData;
+      const daRanked=byDa?Object.keys(daDemand).map(k=>({k,v:daDemand[k]}))
+        .filter(x=>x.v>0).sort((a,b)=>b.v-a.v):[];
+      const daMax=daRanked.length?daRanked[0].v:1;
+      const daRows=daRanked.slice(0,8).map(x=>
+        `<div class="share-row" style="cursor:pointer" onclick="pickDa('${x.k}')"><span class="bar" style="width:${Math.round(100*x.v/daMax)}%"></span><span class="nm">${muniName(DA_DEMAND[x.k].muni)}<span style="opacity:.55"> · DA ${x.k}</span></span><span class="pc">${daArea(x.k).toFixed(2)} km²</span></div>`).join("");
+      // The two reads cover slightly different ground: a community is credited
+      // with the exposure in the demand basins it holds, and those exclude the
+      // watersheds 02 severs at a lake or reservoir, while a neighbourhood is
+      // drawn wherever it carries exposure. Name the gap rather than let two
+      // totals disagree silently.
+      const daTotal=Object.keys(DA_DEMAND).reduce((s,k)=>s+daArea(k),0);
+      const daBlock=byDa?`<p class="sub2" style="margin:15px 0 0">Highest exposure by neighbourhood</p>
+        <div class="share-list">${daRows}</div>
+        <p class="tip">Only neighbourhoods (${daRanked.length}) carrying exposed land inside the modelled 1894 freshet floodplain are included.</p>`:"";
+      const ramp=rampCss(t=>exposureColor(EXP_LO*Math.pow(EXP_HI/EXP_LO,t)));
+      el.innerHTML=`${selCard}<div class="card">
+        <h3>Downstream flood exposure</h3><p class="sub2">Service-benefiting areas</p>
+        <div class="big"><span class="n">${REGION_AREA.toFixed(0)}</span><span class="u">km² of exposed land<br>across ${nExposed} communities</span></div>
+        <p class="sub2" style="margin:14px 0 0">Exposure composition</p>
+        <div class="comp-bar" style="margin-top:8px">${bar}</div>
+        <div class="mini-legend" style="margin-top:5px">${key}</div>
+        ${daBlock}
+        <p class="tip">The model routes exposure per watershed. Summing the same built-up land and cropland by dissemination area shows which parts of a community carry it.</p>
+        <div class="mini-legend"><div class="ramp" style="background:${ramp}"></div>
+          <div class="scale"><span>${EXP_LO<0.01?"<0.01":EXP_LO.toFixed(2)} km²</span><span>${EXP_HI.toFixed(0)} km² exposed</span></div>
+          <div class="row" style="margin-top:8px"><span class="sw" style="background:${NO_EXPOSURE}"></span>DAs not within the modelled floodplain</div></div>
+      </div>`;
+    } else {
+      // supply side: the upstream areas whose retention reaches that exposure
+      const scored=Object.keys(regionScore).map(j=>({j,v:regionScore[j]}))
+        .sort((a,b)=>b.v-a.v);
+      const seen=new Set(), top=[];
+      scored.forEach(x=>{ const nm=featById[x.j].name||"Unnamed area";
+        if(top.length<8 && !seen.has(nm)){ seen.add(nm); top.push(x); } });
+      const maxS=top.length?top[0].v:1;
+      const sRows=top.map(x=>`<div class="share-row" style="cursor:pointer" onclick="onAreaClick('${x.j}')"><span class="bar" style="width:${Math.round(100*x.v/maxS)}%"></span><span class="nm">${featById[x.j].name||"Unnamed area"}</span><span class="pc">${featById[x.j].n_contrib} communities</span></div>`).join("");
+      el.innerHTML=`${selCard}<div class="card">
+        <h3>Upstream ecosystem service</h3><p class="sub2">Retention weighted by the exposure it reaches</p>
+        <div class="stat-row" style="border-top:0;padding-top:0">
+          <div><div class="k">Service-providing areas</div><div class="v">${Object.keys(regionScore).length}</div></div>
+          <div><div class="k">Exposure counted</div><div class="v">${REGION_AREA.toFixed(0)} km²</div></div>
+        </div>
+        <p class="sub2" style="margin:15px 0 0">Highest service provision</p>
+        <div class="share-list">${sRows}</div>
+        ${legendVol(null)}
+      </div>`;
+    }
+  }
+}
+
+/* ============================================================================
+   Controls + tabs
+============================================================================ */
+const muniOptions=MUNIS.features.map(f=>f.properties).sort((a,b)=>a.muni.localeCompare(b.muni));
+// The picker lists the regional-district members this view compares.
+const pickable=muniOptions.filter(m=>m.member_type!=="Reserve");
+// Group members by regional district, then by class (municipality, electoral
+// area, First Nation), so the two districts sit side by side and every member,
+// electoral areas and treaty lands included, is selectable.
+const RD_ORDER=["MVRD","FVRD"];
+const RD_LABEL={MVRD:"Metro Vancouver",FVRD:"Fraser Valley"};
+const CLASS_ORDER=["Municipality","Electoral Area","First Nation","Other"];
+const CLASS_LABEL={Municipality:"Municipalities","Electoral Area":"Electoral areas",
+  "First Nation":"First Nation (treaty)",Other:"Other"};
+function citySelect(id,val,ph){
+  let html=`<select id="${id}"><option value="">${ph}</option>`;
+  RD_ORDER.forEach(rd=>{ CLASS_ORDER.forEach(cls=>{
+    const items=pickable.filter(m=>m.rd===rd&&m.member_class===cls);
+    if(!items.length) return;
+    html+=`<optgroup label="${RD_LABEL[rd]} · ${CLASS_LABEL[cls]}">`+
+      items.map(m=>`<option value="${m.muni_id}" ${m.muni_id==val?"selected":""}>${m.muni}</option>`).join("")+
+      `</optgroup>`;
+  });});
+  return html+`</select>`;
+}
+// Demand-mix sliders (Supply & demand tab), one per exposure type: 0 excludes
+// it, 1 counts it as the model does, above 1 over-weights it to make a small
+// component visible. Each row carries the share of total exposure that part
+// currently accounts for.
+function demandMixHtml(){
+  const {tot,all}=demandMixShares();
+  const rows=DEMAND_PARTS.map(p=>{
+    const share=all>0?100*tot[p.k]/all:0;
+    return `<div class="slider-row" data-k="${p.k}">
+      <div class="slider-top"><span>${p.label}</span>
+        <span class="sv">${DEMAND_W[p.k].toFixed(1)}&times;${DEMAND_W[p.k]>0?` · ${share<0.1&&share>0?"<0.1":share.toFixed(1)}% of exposure`:""}</span></div>
+      <input type="range" class="dmix" data-k="${p.k}" min="0" max="3" step="0.1" value="${DEMAND_W[p.k]}">
+    </div>`;}).join("");
+  const changed=DEMAND_PARTS.some(p=>DEMAND_W[p.k]!==p.def);
+  return `<div class="pick" style="margin-top:10px">
+      <label>Count exposure as</label>${rows}
+      <p class="tip" style="margin-top:6px">Weights scale each exposure type in proportion, which re-ranks the neighbourhoods here and the watersheds on the supply side. Critical facilities and population are trial controls, excluded from the retention and routing model behind these rankings.
+      ${changed?`<br><b>Modified from the model.</b> <a href="#" onclick="resetDemandMix();return false;">Reset</a>`:""}</p>
+    </div>`;
+}
+function bindDemandSliders(){
+  document.querySelectorAll("input.dmix").forEach(r=>{
+    r.oninput=e=>{ DEMAND_W[e.target.dataset.k]=parseFloat(e.target.value);
+      computeDemand(); styleAll(); renderPanel();
+      // repaint only the slider labels: rebuilding the inputs would drop the
+      // drag, and the values live in DEMAND_W either way
+      const {tot,all}=demandMixShares();
+      document.querySelectorAll(".slider-row").forEach(row=>{
+        const k=row.dataset.k, share=all>0?100*tot[k]/all:0;
+        row.querySelector(".sv").innerHTML=`${DEMAND_W[k].toFixed(1)}&times;`+
+          (DEMAND_W[k]>0?` · ${share<0.1&&share>0?"<0.1":share.toFixed(1)}% of exposure`:"");
+      }); };
+    r.onchange=()=>renderControls();   // re-render once, on release, for the reset link
+  });
+}
+function resetDemandMix(){
+  DEMAND_PARTS.forEach(p=>DEMAND_W[p.k]=p.def);
+  computeDemand(); styleAll(); renderControls(); renderPanel();
+}
+
+function renderControls(){
+  const el=document.getElementById("controls");
+  if(mode==="city"||mode==="compare"){
+    const showCmp=cmpOpen||cmpCity!=null;
+    // The dropdown is grouped by regional district and class, so it does the
+    // finding on its own; the separate type-to-search box was a second way to do
+    // the same job and is gone.
+    el.innerHTML=`<div class="pick"><label>Community</label>${citySelect("sel-city",selCity,"Select a community…")}</div>
+      <label class="toggle" style="margin:1px 0 9px"><input type="checkbox" id="tg-compare" ${showCmp?"checked":""}> Compare with a second community</label>
+      <div class="pick" id="cmp-wrap" style="display:${showCmp?"block":"none"};margin-bottom:9px">
+        <label><span class="dot" style="background:${C_ORANGE}"></span>Second community</label>${citySelect("sel-cmp",cmpCity,"Select…")}</div>`;
+    document.getElementById("sel-city").onchange=e=>{selCity=e.target.value?+e.target.value:null; applyMuniMode();};
+    document.getElementById("tg-compare").onchange=e=>{ cmpOpen=e.target.checked;
+      if(!cmpOpen) cmpCity=null;
+      // reveal the row immediately; only flip to compare mode once a 2nd is picked
+      if(cmpOpen&&cmpCity==null){ document.getElementById("cmp-wrap").style.display="block"; }
+      else applyMuniMode(); };
+    document.getElementById("sel-cmp").onchange=e=>{cmpCity=e.target.value?+e.target.value:null;
+      if(cmpCity)cmpOpen=true; applyMuniMode();};
+  } else if(mode==="subbasin"){
+    // Four readings of one clickable subject: what the ecosystems hold back,
+    // what their loss would cost, who depends on them, and how far that
+    // contribution travels. The first two need no downstream at all. Only the
+    // shading changes, so the click and the card it opens stay put.
+    // Each reading carries a second line naming what is counted, since the
+    // names alone leave that open: retention is every m³ held back, whether or
+    // not it reaches anyone; reach is a headcount, unweighted by how much
+    // exposure each community carries; distance is to the nearest one only.
+    // "With / Without" names the comparison the model runs, runoff under
+    // today's cover against runoff off bare ground. Not "benefit", which in
+    // this map means retention weighted by the exposure it reaches, the Supply
+    // side of the ledger.
+    const SUB_BY=[
+      {k:"volume",   l:"With Ecosystems",      r:"mm retained per km²"},
+      {k:"gain",     l:"Without Ecosystems",   r:"% more runoff if cleared"},
+      {k:"count",    l:"Communities Reached",  r:"count only"},
+      {k:"distance", l:"Distance Downstream",  r:"km to nearest"}];
+    // Offered on the counterfactual reading alone: the retention reading states
+    // what the ecosystems do and is not filtered by who benefits.
+    const focusRowCtl=subBy==="gain"?`<label class="toggle" style="margin-top:2px;font-size:12px">
+      <input type="checkbox" id="tg-focus" ${focusOnly?"checked":""}> Highlight losses that would reach the Lower Fraser</label>`:"";
+    el.innerHTML=`<div class="pick"><label>Shade areas by</label><div class="radio-inline wrap2">`+
+      SUB_BY.map(o=>`<label><input type="radio" name="sby" value="${o.k}" ${o.k===subBy?"checked":""}>${o.l}<span class="rsub">${o.r}</span></label>`).join("")+
+      `</div>${focusRowCtl}</div>`;
+    el.querySelectorAll("input[name=sby]").forEach(r=>r.onchange=()=>{
+      subBy=r.value; styleAll(); renderControls(); renderPanel(); updateLensBanner(); });
+    const fc=document.getElementById("tg-focus");
+    if(fc) fc.onchange=e=>{ focusOnly=e.target.checked; styleAll(); renderPanel(); };
+  } else if(mode==="ledger"){
+    el.innerHTML=`<div class="pick"><div class="radio-inline">
+      <label><input type="radio" name="lv" value="supply" ${ledgerView==="supply"?"checked":""}>Supply<span class="rsub">ecosystem service</span></label>
+      <label><input type="radio" name="lv" value="demand" ${ledgerView==="demand"?"checked":""}>Demand<span class="rsub">flood exposure</span></label>
+    </div></div>${hasMuniDemand?demandMixHtml():""}`;
+    el.querySelectorAll("input[name=lv]").forEach(r=>r.onchange=()=>{
+      // renderControls() as well as renderPanel(): the slider caption describes
+      // whichever side is showing, so it has to be rebuilt with the view
+      ledgerView=r.value; ledgerSel=null;   // a pick belongs to the side it was made on
+      traceDelivery();                      // and so does the trace the pick drew
+      styleAll(); renderControls(); renderPanel(); updateLensBanner(); fitForMode(); });
+    bindDemandSliders();
+  } else { el.innerHTML=""; }
+}
+// One line per scenario, shown for the selected one: what the rainfall on
+// screen is. The cross-scenario shading caveat lives in Method & limitations.
+const SCEN_NOTE={
+  ar2021:"The storm that flooded the Sumas Prairie in November 2021.",
+  wettest_month:"The wettest month of an average year, computed for each 800 m grid cell."};
+// Rainfall scenario: its own collapsible block outside the per-lens controls,
+// since it applies to every lens. The summary names the active storm while
+// collapsed. setScenario() calls this again on every switch.
+function renderScenario(){
+  const sum=document.getElementById("scen-sum"), body=document.getElementById("scen-body");
+  if(!sum||!body) return;
+  sum.textContent=SCEN_LABEL;
+  const note=SCEN_NOTE[activeScen]||"";
+  body.innerHTML=`<div class="radio-inline scen-choice">`+
+    SCEN_LIST.map(s=>`<label><input type="radio" name="scen" value="${s.id}" ${s.id===activeScen?"checked":""}><span>${s.label}</span></label>`).join("")+
+    `</div>${note?`<p class="scen-note">${note}</p>`:""}`;
+  body.querySelectorAll("input[name=scen]").forEach(r=>r.onchange=()=>setScenario(r.value));
+}
+// On-map banner naming the active lens + what's clickable, colour-coded to the
+// entity (communities = gold · ecosystems = green · region = teal). Also sets a
+// cursor-affordance class so the non-subject layer doesn't invite clicks.
+function updateLensBanner(){
+  const b=document.getElementById("lensBanner");
+  const M={
+    city:{c:"#e9b730",ic:"▣",t:"Downstream communities",
+      s:selCity?"Darker watersheds deliver more retained runoff to this community after distance decay. Dashes follow the channels draining toward it.":"Click a community on the map, or pick one from the list."},
+    compare:{c:"#e9b730",ic:"▣",t:"Comparing two communities",
+      s:"Gold marks the areas upstream of <b>both</b>. The panel weights the shared contribution by flow distance."},
+    // the title names the lens and stays put; the subtitle follows the active
+    // reading
+    subbasin:{c:subBy==="distance"?"#2c7fb8":subBy==="gain"?"#c4237e":"#2a9d57",ic:"❋",t:"Upstream ecosystems",
+      s:selSub?"The highlighted chain is the route this area's outflow takes. The panel lists the communities it reaches."
+        :subBy==="gain"?"Cleared of natural cover, less rainfall is absorbed and more of the same storm runs off. Darker areas gain the most <b>as a share of the runoff they already produce</b>, so this ranks differently from retention. <b>Click an area</b> for its value."
+        :subBy==="count"?"Darker areas contribute retention to more communities. <b>Click an area</b> to open it."
+        :subBy==="distance"?"Darker blue is closer to a community it serves, and contribution fades with distance. <b>Click an area</b> to trace its drainage path."
+        :"Darker areas retain more runoff per km² of natural land. This reading measures the land itself, from its cover, soil, slope and rainfall. <b>Click an area</b> to see which communities it contributes to."},
+    ledger:ledgerView==="demand"
+      ? {c:"#d1712f",ic:"▼",t:"Demand: downstream flood exposure",
+         s:hasDaData
+           ? "Shaded neighbourhoods carry exposed land in the modelled floodplain. Grey ground inside a community is land the floodplain does not reach. Hover for a neighbourhood's figures."
+           : "Darker communities carry more exposed land in the modelled floodplain."}
+      : {c:"#2a9d57",ic:"▲",t:"Supply: upstream ecosystem service",
+         s:"Darker areas deliver more retained runoff to the exposed land downstream, after distance decay. <b>Click an area</b> to follow its water down to the outlet."} };
+  const m=M[mode], c=map.getContainer();
+  c.classList.remove("lens-city","lens-compare","lens-subbasin",
+    "lens-ledger","lens-ledger-demand","lens-ledger-supply");
+  c.classList.add("lens-"+mode);
+  if(mode==="ledger") c.classList.add("lens-ledger-"+ledgerView);
+  c.classList.toggle("demand-by-da", daReadActive());
+  if(!m){ b.classList.add("hide"); return; }
+  b.classList.remove("hide"); b.style.borderLeftColor=m.c;
+  b.innerHTML=`<div class="lt" style="color:${m.c}"><span class="ic">${m.ic}</span>${m.t}</div><div class="ls">${m.s}</div>`;
+}
+function buildTabs(){
+  // the Community chip stays active while comparing (compare is its sub-mode)
+  document.getElementById("tabs").innerHTML=Object.entries(TABS).map(([k,v])=>{
+    const active = k===mode || (k==="city"&&mode==="compare");
+    return `<div class="tab ${active?"active":""}" data-m="${k}">${v}</div>`;}).join("");
+  document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>setMode(b.dataset.m));
+}
+function setMode(m){
+  clearFlowGlow(); flowGroup.clearLayers();
+  ledgerSel=null;   // the ledger's own pick does not follow the reader out of it
+  if(m==="city"){ applyMuniMode(); return; }   // Community lens (+ its compare sub-mode)
+  selSub=null; mode=m;
+  buildTabs(); renderControls(); styleAll(); renderPanel(); updateLensBanner(); fitForMode();
+}
+
+document.getElementById("tg-label").onchange=updateLabels;
+document.getElementById("tg-river").onchange=buildRivers;
+document.getElementById("tg-area").onchange=styleAll;
+document.getElementById("tg-muni").onchange=e=>{e.target.checked?muniLayer.addTo(map):map.removeLayer(muniLayer);};
+document.getElementById("tg-fn").onchange=e=>{if(!fnLayer)return; e.target.checked?fnLayer.addTo(map):map.removeLayer(fnLayer);};
+/* ============================================================================
+   Assumptions & limitations panel
+   ----------------------------------------------------------------------------
+   Stated as two lists, because they answer different questions. An ASSUMPTION is
+   a choice the model makes that a reader could reasonably have made differently;
+   a LIMITATION is something the model does not do at all. Both are written as
+   what they mean for using the result.
+============================================================================ */
+// A short statement of what the tool measures, so the map stands on its own
+// without carrying the full method. That is set out in README.md and the
+// technical report; link the report from the panel footer once published.
+const BRIEF=[
+  ["What the tool compares",
+   "The tool ranks areas of natural land by the storm runoff they hold back upstream of flood-exposed land in Metro Vancouver and the Fraser Valley, and shows where that contribution is shared between communities. Use it to screen and prioritise at a regional scale. It does not estimate flood risk avoided at any location, and maps no flood extent or depth."],
+  ["1 · Runoff retention",
+   "Runoff is estimated twice for each 30 m cell, once under current land cover and once as bare ground. The difference is the runoff the existing soils and vegetation retain. Both estimates use the SCS curve-number method, driven by land cover, soil drainage and slope."],
+  ["2 · Downstream exposure",
+   "Exposure is the built-up land and cropland inside the 1894 flood-of-record Fraser freshet extent (NHC Lower Fraser 2D model), the floodplain footprint today's dikes defend. Each km² counts equally. This is the demand that upstream retention serves. The extent is a narrow ribbon along the river, reaching 270 of the region's 4,139 census neighbourhoods, so most ground carries no exposure."],
+  ["3 · Linking the two",
+   "Retention is credited to the exposure it drains toward along the stream network, discounted by flow distance on a 20 km half-life. Areas draining away from every focus community receive no credit and are drawn faint, so a high retention value alone does not make an area a priority."],
+  ["4 · Realised benefit",
+   "An area's benefit combines the runoff it retains with the exposure it drains toward. Areas that several communities draw on are candidates for coordinated investment."],
+  ["Inputs",
+   "All inputs are open data: NALCMS and AAFC land cover, HYSOGs soils, Copernicus elevation, PCIC PRISM climatology and the ECCC RDPA November 2021 storm analysis, the NHC Lower Fraser 1894 freshet extent, BC Freshwater Atlas watersheds and streams, the USGS Watershed Boundary Dataset and NHDPlus for the transboundary watersheds, and BC census subdivision and dissemination area boundaries."]
+];
+const LIMITS={
+  assumptions:[
+    ["Bare ground is the comparison",
+     "Retention is the extra runoff that would occur if natural cover were stripped to bare ground. This measures what existing land cover already contributes, not what restoration or protection would add."],
+    ["Every km\u00B2 of exposed land counts equally",
+     "Built-up land and cropland in the floodplain carry the same weight per km\u00B2, and crops are not ranked against each other. No depth-damage or dollar loss is estimated."],
+    ["Benefit halves every 20 km of flow",
+     "An area's contribution to a community is discounted by flow distance on a 20 km half-life. The half-life is a simple rule for how influence fades as tributaries accumulate, and has not been calibrated against measured flows."],
+    ["Lakes and reservoirs end the chain",
+     "Runoff reaching a large lake or reservoir is treated as held there, so upstream retention is not credited past it. Those watersheds still retain water, but that retention buffers the water body. Exposure inside them is mapped and routes to no community, which is why the neighbourhoods hold about 2.6 km&#178; more than the 164 km&#178; the model routes."],
+    ["Land cover is a current snapshot",
+     "Land cover is read at one point in time. No land-use change, forest growth or disturbance is modelled, apart from the bare-ground comparison."],
+    ["Transboundary watersheds use US sources",
+     "Whatcom County watersheds drain north into the study area and count as contributors. They are delineated from the USGS Watershed Boundary Dataset rather than the BC Freshwater Atlas, then stitched into the routing network at the border. Land cover, soils and rainfall use the same grid on both sides."]
+  ],
+  limitations:[
+    ["Built for setting priorities",
+     "The tool compares areas against each other so effort can be directed. It predicts no flood depth, extent or timing. Site-specific decisions need detailed hydraulic modelling."],
+    ["The ranking is the reliable output",
+     "Absolute retained-runoff volumes shift with the rainfall scenario. Which areas matter relative to each other holds far steadier, and that pattern is what the tool is built to show."],
+    ["Shading cannot be compared across scenarios",
+     "The colour scale is rebuilt for each storm, running from zero to that storm's darkest area. Compare shading within one scenario, and use the volumes to compare across two."],
+    ["Only Fraser freshet flooding is represented",
+     "Exposure comes from the NHC Fraser River freshet model, Hope to the Salish Sea. Coastal storm surge, the Serpentine and Nicomekl lowlands, and small-tributary flooding fall outside that domain, so they carry no exposure and the areas upstream of them receive no credit."],
+    ["Critical infrastructure is not counted",
+     "Schools and hospitals are located but excluded from the exposure that drives the results. Which assets belong in a critical-infrastructure set, and what each is worth, are policy decisions this model does not make. The slider under Supply &amp; demand is a trial control, not a modelled result."],
+    ["Population does not drive the ranking",
+     "Exposure is measured as land area at every stage, so a densely populated floodplain and a sparsely populated one of equal area count the same. Population is tallied after the ranking exists, to describe who lives downstream of it. Across the exposed neighbourhoods, built-up area and population are effectively uncorrelated, so land area does not stand in for people. The population slider under Supply &amp; demand is a trial control. Raised, it asks which upstream ecosystems serve people rather than exposed land, the reading a planner concerned with evacuation would want. Weighting people into the model itself would need a view of harm the model does not carry."],
+    ["Community boundaries are administrative",
+     "A community is credited with the watersheds upstream of every demand basin its boundary enters. Those boundaries follow jurisdiction rather than drainage, so a member drawn in several pieces can hold a small detached parcel in a main-stem watershed and be credited with the entire network above it. Metro Vancouver A and Fraser Valley B are both read this way. The exposure figures are unaffected, being measured inside each boundary, but the upstream counts for those two members describe their reach rather than their footprint."],
+    ["Runoff generation only",
+     "The curve-number method estimates how much runoff a storm produces. It does not route water through channels, so it says nothing about peak timing, how the flood wave flattens as it travels, or how tributaries interact."],
+    ["Designation overlays are context",
+     "The Agricultural Land Reserve and the Regional Natural Infrastructure Network can be switched on under Display options. Neither is a model input, and the map asserts no relationship between them and the modelled contribution."]
+  ]
+};
+function renderLimits(){
+  const sec=(title,items)=>`<h3>${title}</h3>`+items.map(([t,d])=>
+    `<div class="lim-item"><div class="t">${t}</div><div class="d">${d}</div></div>`).join("");
+  document.getElementById("limBody").innerHTML=
+    `<p class="lead">This map is a regional screening tool. It compares areas of natural land so effort can be directed where it does the most good. Read the conditions below before acting on the results.</p>`
+    + sec("How it works, in brief", BRIEF)
+    + sec("What the model assumes", LIMITS.assumptions)
+    + sec("What the model does not do", LIMITS.limitations);
+}
+const limBtn=document.getElementById("limBtn"),
+      limPanel=document.getElementById("limPanel"),
+      limScrim=document.getElementById("limScrim");
+function openLimits(){
+  renderLimits();
+  limPanel.classList.remove("hide"); limScrim.classList.remove("hide");
+  limBtn.setAttribute("aria-expanded","true"); limBtn.style.display="none";
+  limPanel.focus();
+}
+function closeLimits(){
+  limPanel.classList.add("hide"); limScrim.classList.add("hide");
+  limBtn.setAttribute("aria-expanded","false"); limBtn.style.display="";
+}
+limBtn.onclick=openLimits;
+document.getElementById("limClose").onclick=closeLimits;
+limScrim.onclick=closeLimits;
+document.addEventListener("keydown",e=>{ if(e.key==="Escape"&&!limPanel.classList.contains("hide")) closeLimits(); });
+
+document.getElementById("tg-terrain").onchange=e=>setTerrain(e.target.checked);
+initOverlayToggles();
+
+// name the active analysis unit in the footer
+document.getElementById("foot-unit").textContent=(typeof META!=="undefined"&&META.unit)||"BC Freshwater Atlas assessment watersheds";
+buildTabs(); renderControls(); renderScenario(); styleAll(); renderPanel(); updateLensBanner();
