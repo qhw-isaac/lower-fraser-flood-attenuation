@@ -275,99 +275,58 @@
 
 <style>
   /* ==========================================================================
-     Walkthrough
+     Phone demo
      --------------------------------------------------------------------------
-     What a phone gets instead of the map. It follows the presentation slide for
-     slide, so a reader who scans the code during the talk sees the view being
-     described, and a reader who scans it afterwards can follow the argument on
-     its own. The map images are rendered from this same tool, two fixed frames
-     across the set so they register against each other while scrolling.
+     What a phone gets instead of the map. Each view is a clip of the real tool
+     being used, recorded from this same page, with one line saying what it
+     shows. The map itself needs a pointer and a wide canvas, so a phone is sent
+     here and told where the interactive version lives.
      ========================================================================== */
   html.guide, html.guide body{overflow:auto;height:auto}
   html.guide #app{display:none}
   #guide{display:none}
   html.guide #guide{display:block}
 
-  #guide{--gblue:#3f7fc4; --ggreen:#4fa96a; --gink:#e8eef5; --gmute:#93a5ba;}
-  #guide{max-width:640px;margin:0 auto;padding:0 20px 64px;
-        font-size:16px;line-height:1.6;color:var(--gink);
-        -webkit-text-size-adjust:100%}
-  #guide section{padding:38px 0;border-top:1px solid var(--line)}
+  #guide{max-width:620px;margin:0 auto;padding:0 20px 60px;
+        font-size:16px;line-height:1.6;color:#e8eef5;-webkit-text-size-adjust:100%}
+  #guide section{padding:34px 0;border-top:1px solid var(--line)}
   #guide section:first-child{border-top:0}
-  #guide h2{font-size:26px;line-height:1.2;font-weight:750;margin:0 0 12px;
+  #guide h2{font-size:25px;line-height:1.2;font-weight:750;margin:0 0 10px;
         letter-spacing:-.01em;color:#fff}
-  #guide h3{font-size:15px;font-weight:650;margin:26px 0 8px;color:var(--gink)}
-  #guide p{margin:0 0 14px;color:#c3d0de}
-  #guide .lead{font-size:18px;line-height:1.5;color:#dbe5ef}
+  #guide p{margin:0 0 12px;color:#c3d0de}
   #guide .eyebrow{font-size:11px;font-weight:700;letter-spacing:.14em;
-        text-transform:uppercase;color:var(--gmute);margin:0 0 10px}
-  #guide .eyebrow.b{color:#7fb0e0}
-  #guide .eyebrow.g{color:#7fce9a}
+        text-transform:uppercase;color:#93a5ba;margin:0 0 9px}
 
-  /* opening card */
-  #guide .hero{padding:44px 0 34px}
-  #guide .hero h1{font-size:33px;line-height:1.12;font-weight:800;margin:0 0 14px;
+  /* opening */
+  #guide .hero{padding:42px 0 30px}
+  #guide .hero h1{font-size:32px;line-height:1.12;font-weight:800;margin:0 0 12px;
         letter-spacing:-.02em;color:#fff}
-  #guide .hero h1 em{font-style:normal;color:var(--ggreen)}
-  #guide .hero .tag{font-size:15px;color:var(--gmute);margin:0 0 24px}
-  #guide .credits{font-size:12.5px;line-height:1.7;color:var(--gmute);
-        border-top:1px solid var(--line);padding-top:16px;margin-top:4px}
-  #guide .credits b{color:var(--gink);font-weight:650}
+  #guide .hero h1 em{font-style:normal;color:#4fa96a}
+  #guide .hero .tag{font-size:15px;color:#93a5ba;margin:0 0 22px}
+  #guide .credits{font-size:12.5px;line-height:1.7;color:#93a5ba;
+        border-top:1px solid var(--line);padding-top:15px;margin-top:20px}
+  #guide .credits b{color:#e8eef5;font-weight:650}
 
-  /* the desktop notice the reader meets first */
-  #guide .notice{background:#16302c;border:1px solid #2c5e56;border-left:3px solid var(--accent);
-        border-radius:11px;padding:16px 17px;margin:0 0 22px}
-  #guide .notice p{margin:0;font-size:14px;line-height:1.55;color:#cfeae4}
+  #guide .notice{background:#16302c;border:1px solid #2c5e56;
+        border-left:3px solid var(--accent);border-radius:11px;padding:15px 16px}
+  #guide .notice p{margin:0;font-size:14.5px;line-height:1.5;color:#cfeae4}
   #guide .notice b{color:#fff}
-  #guide .go{display:block;width:100%;margin-top:13px;padding:12px 14px;
+  #guide .go{display:block;width:100%;margin-top:12px;padding:12px 14px;
         font:inherit;font-size:14px;font-weight:600;text-align:center;cursor:pointer;
         color:var(--ink);background:var(--panel2);border:1px solid var(--line);
         border-radius:9px;-webkit-appearance:none}
   #guide .go:active{background:#24374d}
-  #guide .scroll-cue{text-align:center;font-size:12px;color:var(--gmute);
-        letter-spacing:.1em;text-transform:uppercase;margin-top:30px}
 
-  /* map figures */
-  #guide figure{margin:18px 0 0}
-  #guide figure img{width:100%;display:block;border-radius:11px;
-        border:1px solid var(--line);background:#eef2f6}
-  #guide figure img.wide{aspect-ratio:760/981}
-  #guide figure img.corr{aspect-ratio:900/624}
-  #guide figcaption{font-size:12.5px;line-height:1.5;color:var(--gmute);margin-top:9px}
+  /* clips: the real tool in use */
+  #guide video{width:100%;display:block;border-radius:11px;border:1px solid var(--line);
+        background:#eef2f6;aspect-ratio:760/892;margin:0 0 14px}
+  #guide .fig{font-size:13px;line-height:1.5;color:#93a5ba;margin:0}
+  #guide .fig b{color:#e8eef5;font-weight:650;font-variant-numeric:tabular-nums}
 
-  /* figure blocks and stats reused from the map's own vocabulary */
-  #guide .card{background:var(--panel2);border:1px solid var(--line);
-        border-radius:11px;padding:15px 16px;margin-top:18px}
-  #guide .card h4{margin:0 0 2px;font-size:16px;font-weight:650;color:#fff}
-  #guide .card .sub2{font-size:11px;color:var(--gmute);text-transform:uppercase;
-        letter-spacing:.08em;margin:0 0 12px}
-  #guide .stats{display:flex;gap:20px;flex-wrap:wrap}
-  #guide .stats>div{flex:1 1 40%}
-  #guide .stats .k{font-size:11.5px;color:var(--gmute);margin-bottom:3px}
-  #guide .stats .v{font-size:22px;font-weight:700;font-variant-numeric:tabular-nums;
-        line-height:1.1;color:#fff}
-  #guide .stats .v span{font-size:11px;font-weight:400;color:var(--gmute);margin-left:3px}
-  #guide .rows{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}
-  #guide .rows .r{display:flex;justify-content:space-between;gap:12px;
-        font-size:13.5px;padding:5px 0}
-  #guide .rows .r span:last-child{font-variant-numeric:tabular-nums;color:var(--gmute);flex:none}
-  #guide .bar{display:flex;height:11px;border-radius:4px;overflow:hidden;
-        border:1px solid #0004;margin:4px 0 10px}
-  #guide .bar span{height:100%}
-
-  /* legend ramps, drawn rather than screenshotted so they stay crisp */
-  #guide .ramp{height:11px;border-radius:3px;border:1px solid #0003;margin-top:14px}
-  #guide .ramp-lab{display:flex;justify-content:space-between;font-size:11px;
-        color:var(--gmute);margin-top:4px}
-  #guide .keys{display:flex;flex-wrap:wrap;gap:7px 14px;margin-top:12px;font-size:12px;color:var(--gmute)}
-  #guide .keys i{width:14px;height:11px;border-radius:3px;border:1px solid #0003;
-        display:inline-block;margin-right:6px;vertical-align:-1px}
-
-  /* closing */
-  #guide .end{text-align:center;padding-top:34px}
+  #guide .end{text-align:center}
   #guide .end a{color:var(--accent);word-break:break-all;font-size:14px}
-  #guide .foot{font-size:11.5px;line-height:1.65;color:var(--gmute);
-        border-top:1px solid var(--line);padding-top:18px;margin-top:26px}
+  #guide .foot{font-size:11.5px;line-height:1.65;color:#93a5ba;
+        border-top:1px solid var(--line);padding-top:16px;margin-top:24px;text-align:left}
 </style>
 </head>
 <body>
@@ -378,245 +337,67 @@
     <p class="eyebrow">MFRE GP Showcase &middot; 21 August 2026</p>
     <h1>How <em>natural ecosystems</em> reduce flood risk</h1>
     <p class="tag">A spatial analysis of the Lower Fraser</p>
-
     <div class="notice">
-      <p><b>Opening this page on a desktop or laptop makes the map interactive.</b>
-      There you can select any community, switch between the layers and read the
-      figures behind each one. This page walks through the same views as a fixed
-      summary, so it stands on its own.</p>
-      <button class="go" id="guide-go" type="button">Load the interactive map anyway</button>
+      <p><b>Open this page on a desktop or laptop to use the map yourself.</b>
+      Below is the same tool in use.</p>
+      <button class="go" id="guide-go" type="button">Load the map on this device</button>
     </div>
-
     <div class="credits">
       <b>Isaac Qi</b>, UBC Sustainability Scholar<br>
-      Project partner: <b>Metro Vancouver</b> (Marcin Pachcinski, Sinisa Vukicevic)<br>
+      Project partner: <b>Metro Vancouver</b><br>
       Faculty supervisor: <b>Dr. Matthew Mitchell</b>
     </div>
-    <p class="scroll-cue">Scroll to begin</p>
   </section>
 
   <section>
-    <p class="eyebrow b">The problem</p>
-    <h2>Flood risk is rising</h2>
-    <p class="lead">Extreme climate-driven events are placing growing pressure on
-    communities across the Lower Fraser.</p>
-    <p>The November 2021 atmospheric river that flooded the Sumas Prairie is the
-    rainfall scenario behind every figure on this page.</p>
+    <p class="eyebrow">Community</p>
+    <h2>Where a community's water comes from</h2>
+    <video src="assets/community.mp4" poster="assets/community.webp"
+           autoplay loop muted playsinline preload="none"
+           aria-label="Abbotsford is selected on the map, the view pulls back, and the upstream channels that drain toward it are drawn in."></video>
+    <p class="fig">Selecting Abbotsford traces the <b>342</b> upstream watersheds
+    whose retained runoff reaches it.</p>
   </section>
 
   <section>
-    <p class="eyebrow g">The response</p>
-    <h2>Nature is part of the solution</h2>
-    <p class="lead">Healthy upstream ecosystems provide natural flood protection
-    by retaining and slowing water.</p>
-    <p>Forests, wetlands, shrubland and grassland absorb rainfall that would
-    otherwise run off. That retention happens upstream, and the benefit is
-    carried downstream to the communities those watersheds drain toward.</p>
+    <p class="eyebrow">Shared ground</p>
+    <h2>Communities depend on the same land</h2>
+    <video src="assets/compare.mp4" poster="assets/compare.webp"
+           autoplay loop muted playsinline preload="none"
+           aria-label="Chilliwack is added to the map and the watersheds upstream of both communities turn gold."></video>
+    <p class="fig">Abbotsford and Chilliwack draw on the same <b>330</b> upstream
+    areas, so a land-use decision there carries to both.</p>
   </section>
 
   <section>
-    <p class="eyebrow">The question</p>
-    <h2>Where does that protection come from, and who receives it?</h2>
-    <p>National-scale research has established that these ecosystem services
-    matter across Canada. This project brings the question to a regional scale
-    for Metro Vancouver and the Fraser Valley: which upstream areas hold back
-    the most runoff, which communities does that retention reach, and where is
-    it shared between them.</p>
-    <div class="card">
-      <div class="stats">
-        <div><div class="k">Assessment watersheds</div><div class="v">637</div></div>
-        <div><div class="k">Exposed land mapped</div><div class="v">164<span>km&sup2;</span></div></div>
-      </div>
-      <div class="rows">
-        <div class="r"><span>Communities carrying exposure</span><span>24</span></div>
-        <div class="r"><span>Watersheds providing service</span><span>422</span></div>
-      </div>
-    </div>
+    <p class="eyebrow">Upstream ecosystems</p>
+    <h2>Four readings of the same land</h2>
+    <video src="assets/lenses.mp4" poster="assets/lenses.webp"
+           autoplay loop muted playsinline preload="none"
+           aria-label="The upstream watersheds are shaded in turn by retention, by runoff gained if cleared, by communities reached, and by distance downstream."></video>
+    <p class="fig">What these areas retain, what their loss would cost, how many
+    communities they serve, and how far that contribution travels.</p>
   </section>
 
   <section>
-    <p class="eyebrow b">View 1</p>
-    <h2>Community</h2>
-    <p>The region's communities, across Metro Vancouver and the Fraser Valley.
-    On a desktop, selecting one traces the water that reaches it.</p>
-    <figure>
-      <img class="corr" loading="lazy" src="assets/city-empty.webp"
-           alt="Metro Vancouver and Fraser Valley community boundaries along the Fraser River.">
-      <figcaption>Community boundaries across the study area.</figcaption>
-    </figure>
-    <figure>
-      <img class="wide" loading="lazy" src="assets/city-abb.webp"
-           alt="The watersheds draining toward Abbotsford, with dashes following the channels that carry water to it.">
-      <figcaption>Abbotsford selected. Shading marks the watersheds delivering
-      retained runoff to it after distance decay, and the dashes follow the
-      channels draining toward it.</figcaption>
-    </figure>
-    <div class="card">
-      <h4>Abbotsford</h4>
-      <p class="sub2">Fraser Valley &middot; City</p>
-      <div class="stats">
-        <div><div class="k">Upstream watersheds</div><div class="v">342</div></div>
-        <div><div class="k">Natural land</div><div class="v">13,651<span>km&sup2;</span></div></div>
-      </div>
-      <div class="rows">
-        <div class="r"><span>Forest</span><span>10,363 km&sup2;</span></div>
-        <div class="r"><span>Shrubland</span><span>2,176 km&sup2;</span></div>
-        <div class="r"><span>Grassland</span><span>1,106 km&sup2;</span></div>
-        <div class="r"><span>Wetland</span><span>7 km&sup2;</span></div>
-      </div>
-    </div>
-  </section>
-
-  <section>
-    <p class="eyebrow b">View 1b</p>
-    <h2>Community comparison</h2>
-    <p>Two communities can draw on much of the same upstream land. Where they do,
-    a land-use decision in one watershed carries to both.</p>
-    <figure>
-      <img class="wide" loading="lazy" src="assets/compare.webp"
-           alt="Watersheds upstream of both Abbotsford and Chilliwack shown in gold, with each community's own upstream areas in blue and orange.">
-      <figcaption>Gold marks the areas upstream of both Abbotsford and
-      Chilliwack.</figcaption>
-    </figure>
-    <div class="card">
-      <h4>Abbotsford &amp; Chilliwack</h4>
-      <p class="sub2">Shared upstream contribution</p>
-      <div class="stats">
-        <div><div class="k">Abbotsford shares</div><div class="v">67<span>%</span></div></div>
-        <div><div class="k">Chilliwack shares</div><div class="v">29<span>%</span></div></div>
-      </div>
-      <div class="rows">
-        <div class="r"><span>Overlap in the contribution each receives</span><span>26%</span></div>
-        <div class="r"><span>Areas upstream of both</span><span>330</span></div>
-      </div>
-    </div>
-    <p style="margin-top:14px">Across the region the largest overlaps are Fraser
-    Valley B and Hope (61%), Fraser Valley B and Kent (47%), and Hope and Kent
-    (34%).</p>
-  </section>
-
-  <section>
-    <p class="eyebrow g">View 2</p>
-    <h2>Upstream ecosystems</h2>
-    <p>The same upstream areas read four ways: what they hold back, what their
-    loss would cost, how many communities depend on them, and how far that
-    contribution travels.</p>
-
-    <h3>With ecosystems</h3>
-    <p>Runoff retained per km&sup2; of natural land, from cover, soil, slope and
-    rainfall. This measures the land itself, whoever is downstream.</p>
-    <figure>
-      <img class="wide" loading="lazy" src="assets/sub-volume.webp"
-           alt="Upstream watersheds shaded green by millimetres of runoff retained per square kilometre.">
-    </figure>
-    <div class="ramp" style="background:linear-gradient(90deg,#ffffe5,#d9f0a3,#78c679,#238b45,#00602a)"></div>
-    <div class="ramp-lab"><span>0 mm</span><span>62 mm retained</span></div>
-
-    <h3>Without ecosystems</h3>
-    <p>Cleared of natural cover, less rainfall is absorbed and more of the same
-    storm runs off. Darker areas gain the most as a share of the runoff they
-    already produce, so this ranks differently from retention.</p>
-    <figure>
-      <img class="wide" loading="lazy" src="assets/sub-gain.webp"
-           alt="Upstream watersheds shaded pink by the percentage increase in runoff if natural cover were cleared.">
-    </figure>
-    <div class="ramp" style="background:linear-gradient(90deg,#ffffff,#f9c7dd,#ec7bb0,#c9257e,#8c0c55)"></div>
-    <div class="ramp-lab"><span>no change</span><span>150% or more</span></div>
-
-    <h3>Communities reached</h3>
-    <p>How many communities each area's retention reaches. The areas serving many
-    are the shared assets.</p>
-    <figure>
-      <img class="wide" loading="lazy" src="assets/sub-count.webp"
-           alt="Upstream watersheds shaded blue by the number of communities their retention reaches.">
-    </figure>
-    <div class="keys">
-      <span><i style="background:#f2f7fb"></i>none</span>
-      <span><i style="background:#b7e4d0"></i>1</span>
-      <span><i style="background:#7fd0b6"></i>2 to 3</span>
-      <span><i style="background:#4bb89c"></i>4 to 6</span>
-      <span><i style="background:#2f9491"></i>7 to 10</span>
-      <span><i style="background:#22697f"></i>11 to 14</span>
-      <span><i style="background:#17456b"></i>15 or more</span>
-      <span><i style="background:#e6dccb"></i>drains to a lake</span>
-    </div>
-
-    <h3>Distance downstream</h3>
-    <p>Flow distance to the nearest community an area serves. Contribution is
-    discounted on a 20 km half-life, so it fades as the water travels.</p>
-    <figure>
-      <img class="wide" loading="lazy" src="assets/sub-distance.webp"
-           alt="Upstream watersheds shaded by flow distance to the nearest community they serve.">
-    </figure>
-    <div class="ramp" style="background:linear-gradient(90deg,#12508c,#2f8fb5,#7fd0c0,#d9f0e6,#ffffff)"></div>
-    <div class="ramp-lab"><span>0 km</span><span>164 km to the nearest community</span></div>
-  </section>
-
-  <section>
-    <p class="eyebrow">View 3</p>
-    <h2>Supply and demand</h2>
-    <p>The two sides of one ledger. Supply is the retention upstream weighted by
-    the exposure it reaches. Demand is the exposed land downstream that retention
-    serves.</p>
-
-    <h3>Supply: upstream ecosystem service</h3>
-    <figure>
-      <img class="wide" loading="lazy" src="assets/ledger-supply.webp"
-           alt="Upstream watersheds shaded green by the retained runoff they deliver to exposed land downstream.">
-      <figcaption>Darker areas deliver more retained runoff to the exposed land
-      downstream, after distance decay.</figcaption>
-    </figure>
-    <div class="card">
-      <div class="stats">
-        <div><div class="k">Service-providing areas</div><div class="v">422</div></div>
-        <div><div class="k">Exposure counted</div><div class="v">164<span>km&sup2;</span></div></div>
-      </div>
-    </div>
-
-    <h3>Demand: downstream flood exposure</h3>
-    <figure>
-      <img class="corr" loading="lazy" src="assets/ledger-demand.webp"
-           alt="Communities and neighbourhoods shaded orange by the exposed land they carry in the modelled floodplain.">
-      <figcaption>Shaded ground carries exposed land in the modelled floodplain.
-      Grey ground inside a community is land the floodplain does not reach.</figcaption>
-    </figure>
-    <div class="card">
-      <h4>164 km&sup2; of exposed land</h4>
-      <p class="sub2">across 24 communities</p>
-      <div class="bar">
-        <span style="width:23%;background:#7d8794"></span>
-        <span style="width:77%;background:#4fa96a"></span>
-      </div>
-      <div class="rows" style="border-top:0;padding-top:0">
-        <div class="r"><span>Built-up land</span><span>23%</span></div>
-        <div class="r"><span>Cropland</span><span>77%</span></div>
-      </div>
-    </div>
-  </section>
-
-  <section>
-    <h2>How to read this</h2>
-    <p>The tool ranks areas of natural land by the storm runoff they hold back
-    upstream of flood-exposed land, and shows where that contribution is shared
-    between communities. Use it to screen and prioritise at a regional scale.</p>
-    <p>It does not estimate flood risk avoided at any location, and maps no flood
-    extent or depth. Absolute volumes shift with the rainfall scenario, while the
-    ranking between areas holds far steadier, and that pattern is what the tool is
-    built to show. Site-specific decisions need detailed hydraulic modelling.</p>
+    <p class="eyebrow">Supply and demand</p>
+    <h2>Matching the service to the exposure</h2>
+    <video src="assets/ledger.mp4" poster="assets/ledger.webp"
+           autoplay loop muted playsinline preload="none"
+           aria-label="The map switches from the green upstream supply view to the orange downstream exposure view and back."></video>
+    <p class="fig">Retention upstream is weighted by the <b>164 km&sup2;</b> of
+    exposed floodplain downstream that it serves.</p>
   </section>
 
   <section class="end">
-    <p class="eyebrow">Learn more</p>
-    <h2>Open the full map</h2>
-    <p>On a desktop or laptop, this address loads the interactive version, where
-    every community and every layer can be explored directly.</p>
+    <p class="eyebrow">The interactive map</p>
     <p><a href="https://qhw-isaac.github.io/lower-fraser-flood-attenuation/">qhw-isaac.github.io/lower-fraser-flood-attenuation/</a></p>
-    <button class="go" id="guide-go2" type="button">Load the interactive map on this device</button>
+    <button class="go" id="guide-go2" type="button">Load the map on this device</button>
     <div class="foot">
-      Analysis unit: BC Freshwater Atlas assessment watersheds. Rainfall scenario:
-      atmospheric river event, November 2021. Figures on this page are drawn from
-      that scenario. Basemap &copy; OpenStreetMap contributors and CARTO;
-      hillshade from Esri.
+      A regional screening tool for comparing areas and setting priorities. It
+      does not predict flood depth, extent or timing. Analysis unit: BC Freshwater
+      Atlas assessment watersheds. Rainfall scenario: atmospheric river event,
+      November 2021. Basemap &copy; OpenStreetMap contributors and CARTO.
     </div>
   </section>
 
@@ -686,13 +467,12 @@
    Which page this is
    ----------------------------------------------------------------------------
    The map places a 400 px reading panel beside a large canvas and is read by
-   pointing at things, so a phone gets the walkthrough above instead. That
-   decision is made before anything heavy is requested: Leaflet, data.js and
-   map.js are injected only when the map is actually going to run, which keeps
-   the walkthrough to its own markup and images.
+   pointing at things, so a phone gets the demo above instead. That decision is
+   made before anything heavy is requested: Leaflet, data.js and map.js are
+   injected only when the map is actually going to run.
 
-   ?map  forces the interactive map on any device (the "load it anyway" button).
-   ?guide forces the walkthrough on any device, for checking it from a desktop.
+   ?map   forces the interactive map on any device (the "load it anyway" button)
+   ?guide forces the demo on any device, for checking it from a desktop
 ============================================================================ */
 (function(){
   var q = location.search;
@@ -730,6 +510,29 @@
     var go = function(){ loadMap(); window.scrollTo(0,0); };
     document.getElementById("guide-go").onclick  = go;
     document.getElementById("guide-go2").onclick = go;
+    // Play a clip only while it is on screen. Four autoplaying videos at once
+    // costs battery and data for footage nobody is looking at. A reader who has
+    // asked the system for reduced motion gets the same clips under their own
+    // control instead.
+    var vids = [].slice.call(document.querySelectorAll("#guide video"));
+    if(window.matchMedia("(prefers-reduced-motion:reduce)").matches){
+      vids.forEach(function(v){
+        v.removeAttribute("autoplay"); v.removeAttribute("loop");
+        v.controls = true; v.preload = "metadata";
+      });
+      return;
+    }
+    if(window.IntersectionObserver){
+      var io = new IntersectionObserver(function(es){
+        es.forEach(function(e){
+          if(e.isIntersecting){ e.target.play().catch(function(){}); }
+          else { e.target.pause(); }
+        });
+      },{rootMargin:"120px 0px"});
+      vids.forEach(function(v){ io.observe(v); });
+    } else {
+      vids.forEach(function(v){ v.setAttribute("preload","metadata"); });
+    }
   } else {
     loadMap();
   }
