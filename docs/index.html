@@ -392,8 +392,6 @@
   #guide .go:active{filter:brightness(.92)}
   #guide .go.ghost{color:var(--g-ink);background:var(--panel2);
         border:1px solid var(--g-rule);margin-top:9px}
-  #guide .foot{font-size:11.5px;line-height:1.7;color:#7d90a6;
-        border-top:1px solid var(--g-rule);padding-top:18px;margin-top:28px}
 </style>
 </head>
 <body>
@@ -410,8 +408,9 @@
     <p class="eyebrow">MFRE GP Showcase &middot; 21 August 2026</p>
     <h1>How <em>natural ecosystems</em> reduce flood risk</h1>
     <p class="tag">A spatial analysis of the Lower Fraser</p>
-    <p class="lead">An interactive map of the ecosystems that slow water on its
-    way to the communities below. Each of its three views is shown here in use.</p>
+    <p class="lead">An interactive map of the ecosystems that slow storm runoff
+    on its way to the communities below. Each of its three views is shown here in
+    use.</p>
     <div class="credits">
       <span><b>Isaac Qi</b>, UBC Sustainability Scholar</span>
       <span>Project partner: <b>Metro Vancouver</b></span>
@@ -422,7 +421,7 @@
   <!-- ------------------------------------------------------------------ part 1 -->
   <section class="part part-1" data-mark="1 &middot; <b>Community view</b>">
     <p class="num"><i>1</i>Community view</p>
-    <h2>The path water takes to a community</h2>
+    <h2>The path storm runoff takes to a community</h2>
     <p>Selecting a community traces the channels that drain toward it, and the
     ecosystems along the way that hold part of the storm back.</p>
 
@@ -431,7 +430,7 @@
              loop muted playsinline preload="none"
              aria-label="Abbotsford is selected on the map, the view pulls back, and the upstream channels draining toward it are drawn in."></video>
       <figcaption>Abbotsford, with the channels draining toward it. Darker land
-      upstream attenuates more of the water on its way down.</figcaption>
+      upstream attenuates more of the runoff on its way down.</figcaption>
     </figure>
 
     <figure class="clip">
@@ -439,7 +438,7 @@
              loop muted playsinline preload="none"
              aria-label="Chilliwack is added as a second community and the watersheds upstream of both turn gold."></video>
       <figcaption>Gold marks the ground upstream of both. The same ecosystems
-      slow water for each city, so a change there carries to both.</figcaption>
+      slow runoff for each city, so a change there carries to both.</figcaption>
     </figure>
   </section>
 
@@ -492,9 +491,9 @@
     <figure class="clip">
       <video data-src="assets/supply-select.mp4" data-poster="assets/supply-select.webp"
              loop muted playsinline preload="none"
-             aria-label="A watershed is selected in the green supply view and the chain of watersheds carrying its water down to the outlet lights up."></video>
+             aria-label="A watershed is selected in the green supply view and the chain of watersheds carrying its runoff down to the outlet lights up."></video>
       <figcaption><b>Supply</b> is the retention delivered downstream. Selecting
-      a watershed follows its water to the outlet.</figcaption>
+      a watershed follows its runoff to the outlet.</figcaption>
     </figure>
 
     <figure class="clip">
@@ -527,17 +526,6 @@
     <button type="button" class="go go-map">Load the map on this device</button>
     <p style="margin-top:10px;font-size:13px;color:#7d90a6">The map is built for a
     pointer and a wide canvas. It will run here, but it will be cramped.</p>
-
-    <div class="foot">
-      A regional screening tool for comparing areas and setting priorities. It
-      does not predict flood depth, extent or timing. Analysis unit: BC Freshwater
-      Atlas assessment watersheds. Rainfall scenario: atmospheric river event,
-      November 2021. Exposure is measured as land area, so population does not
-      drive the ranking. The retention and routing method is a regional
-      adaptation of Duarte et al. (2024), <i>Ecosystem Services</i>. Full method,
-      inputs and limitations are set out in the technical report. Basemap
-      &copy; OpenStreetMap contributors and CARTO.
-    </div>
   </section>
 
 </div>
@@ -711,18 +699,17 @@
 
     // Each clip is a short piece of choreography, so it runs from the start when
     // the reader arrives at it rather than resuming wherever it was left. Half
-    // the clip has to be on screen to count as arrived.
+    // the clip has to be on screen to count as arrived. The rewind happens on the
+    // way out, where the seek repaints off screen instead of flashing in view.
     var play = new IntersectionObserver(function(es){
       es.forEach(function(e){
         var v = e.target;
         if(e.isIntersecting){
-          if(v.paused){
-            // a clip that has only just loaded is already at 0, and seeking
-            // before its metadata arrives interrupts that load
-            if(v.readyState >= 1){ try{ v.currentTime = 0; }catch(err){} }
-            v.play().catch(function(){});
-          }
-        } else if(!v.paused){ v.pause(); }
+          if(v.paused) v.play().catch(function(){});
+        } else if(!v.paused){
+          v.pause();
+          if(v.readyState >= 1){ try{ v.currentTime = 0; }catch(err){} }
+        }
       });
     },{threshold:0.5});
 
