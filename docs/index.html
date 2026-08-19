@@ -382,14 +382,6 @@
         margin-right:8px;vertical-align:middle;transform:translateY(-1px)}
   #guide .lenses p{font-size:14.5px;line-height:1.55;margin:0;color:var(--g-dim)}
 
-  /* --- key figures --------------------------------------------------------- */
-  #guide .stats{display:flex;gap:10px;margin:20px 0 0}
-  #guide .stats>div{flex:1;background:var(--g-card);border:1px solid var(--g-rule);
-        border-radius:11px;padding:13px 14px}
-  #guide .stats .v{font-size:22px;font-weight:750;color:#fff;line-height:1.1;
-        font-variant-numeric:tabular-nums}
-  #guide .stats .k{font-size:11.5px;line-height:1.4;color:var(--g-dim);margin-top:5px}
-
   /* --- close --------------------------------------------------------------- */
   #guide .close{text-align:left}
   #guide .close .url{display:block;font-size:14px;color:var(--accent);
@@ -418,10 +410,8 @@
     <p class="eyebrow">MFRE GP Showcase &middot; 21 August 2026</p>
     <h1>How <em>natural ecosystems</em> reduce flood risk</h1>
     <p class="tag">A spatial analysis of the Lower Fraser</p>
-    <p class="lead">This analysis maps where runoff retention is produced in the
-    Lower Fraser, which communities receive it, and how much exposed land it
-    reaches. The result is an interactive map with three views. Each is shown
-    below as a clip of the tool in use.</p>
+    <p class="lead">An interactive map of the ecosystems that slow water on its
+    way to the communities below. Each of its three views is shown here in use.</p>
     <div class="credits">
       <span><b>Isaac Qi</b>, UBC Sustainability Scholar</span>
       <span>Project partner: <b>Metro Vancouver</b></span>
@@ -432,66 +422,54 @@
   <!-- ------------------------------------------------------------------ part 1 -->
   <section class="part part-1" data-mark="1 &middot; <b>Community view</b>">
     <p class="num"><i>1</i>Community view</p>
-    <h2>Where a community's water comes from</h2>
-    <p>Start from a place. Selecting a community traces every watershed upstream
-    of it and the channels that carry water down.</p>
+    <h2>The path water takes to a community</h2>
+    <p>Selecting a community traces the channels that drain toward it, and the
+    ecosystems along the way that hold part of the storm back.</p>
 
     <figure class="clip">
       <video data-src="assets/community-select.mp4" data-poster="assets/community-select.webp"
              loop muted playsinline preload="none"
              aria-label="Abbotsford is selected on the map, the view pulls back, and the upstream channels draining toward it are drawn in."></video>
-      <figcaption>Selecting Abbotsford pulls the view back to the <b>342</b>
-      upstream watersheds whose retained runoff reaches it. Darker shading marks
-      the areas delivering more, after contribution is decayed by flow distance.</figcaption>
+      <figcaption>Abbotsford, with the channels draining toward it. Darker land
+      upstream attenuates more of the water on its way down.</figcaption>
     </figure>
 
     <figure class="clip">
       <video data-src="assets/community-compare.mp4" data-poster="assets/community-compare.webp"
              loop muted playsinline preload="none"
              aria-label="Chilliwack is added as a second community and the watersheds upstream of both turn gold."></video>
-      <figcaption>Adding Chilliwack marks the ground upstream of both in gold.
-      The two cities draw on the same <b>330</b> areas, so a land-use decision
-      there carries to both.</figcaption>
+      <figcaption>Gold marks the ground upstream of both. The same ecosystems
+      slow water for each city, so a change there carries to both.</figcaption>
     </figure>
-
-    <div class="stats">
-      <div><div class="v">342</div><div class="k">watersheds upstream of Abbotsford</div></div>
-      <div><div class="v">26%</div><div class="k">of its contribution shared with Chilliwack</div></div>
-    </div>
   </section>
 
   <!-- ------------------------------------------------------------------ part 2 -->
   <section class="part part-2" data-mark="2 &middot; <b>Upstream ecosystems</b>">
     <p class="num"><i>2</i>Upstream ecosystems</p>
     <h2>Four readings of the same land</h2>
-    <p>Turn the question around and read the land itself. Selecting a watershed
-    opens what it retains and which communities that retention reaches.</p>
-
-    <p>The same watersheds can be shaded four ways. Each answers a different
-    question, and each ranks the region differently.</p>
+    <p>Read the land itself. The same watersheds can be shaded four ways, and
+    each ranks them differently.</p>
 
     <ul class="lenses">
       <li>
         <h3><span class="sw" style="background:linear-gradient(90deg,#e9f5d8,#3f9c53)"></span>With ecosystems</h3>
-        <p>Millimetres of runoff retained per km&sup2; of natural land, from its
-        cover, soil, slope and rainfall. What the land holds back today.</p>
+        <p>What the land holds back today, from its cover, soil, slope and
+        rainfall.</p>
       </li>
       <li>
         <h3><span class="sw" style="background:linear-gradient(90deg,#fbdcea,#c2185b)"></span>Without ecosystems</h3>
         <p>How much more of the same storm would run off if that cover were
-        cleared, as a share of the runoff the area already produces. Areas with
-        little runoff today stand to lose proportionally the most, so this ranks
-        differently from retention.</p>
+        lost. This ranks differently from retention.</p>
       </li>
       <li>
         <h3><span class="sw" style="background:linear-gradient(90deg,#d9f0e8,#1d5e8c)"></span>Communities reached</h3>
-        <p>The number of downstream communities an area contributes to. Areas
-        serving many are shared assets, and no single jurisdiction holds them.</p>
+        <p>How many communities an area serves. Those serving many are shared
+        assets.</p>
       </li>
       <li>
         <h3><span class="sw" style="background:linear-gradient(90deg,#dff5ee,#17537d)"></span>Distance downstream</h3>
-        <p>Flow distance to the nearest community served. Contribution fades with
-        distance, so nearby land delivers more of what it retains.</p>
+        <p>Flow distance to the nearest community served. Contribution fades
+        with distance.</p>
       </li>
     </ul>
 
@@ -499,9 +477,8 @@
       <video data-src="assets/upstream-ecosystems.mp4" data-poster="assets/upstream-ecosystems.webp"
              loop muted playsinline preload="none"
              aria-label="An upstream watershed is selected and the panel lists what it retains and the communities its outflow reaches, then the shading is switched between the four readings."></video>
-      <figcaption>Selecting an area opens what it retains and the communities its
-      outflow reaches. Switching between the four readings re-shades the same
-      watersheds, and changes which of them rank highest.</figcaption>
+      <figcaption>An area opens to what it retains and where its outflow goes.
+      Switching readings re-shades the same watersheds.</figcaption>
     </figure>
   </section>
 
@@ -509,53 +486,43 @@
   <section class="part part-3" data-mark="3 &middot; <b>Supply &amp; demand</b>">
     <p class="num"><i>3</i>Supply &amp; demand</p>
     <h2>Matching the service to the exposure</h2>
-    <p>Retention only counts as a service where something downstream is exposed
-    to flooding. This view separates the two sides, then weights one by the other.</p>
+    <p>Retention counts as a service only where something downstream is exposed.
+    This view separates the two sides, then weights one by the other.</p>
 
     <figure class="clip">
       <video data-src="assets/supply-select.mp4" data-poster="assets/supply-select.webp"
              loop muted playsinline preload="none"
              aria-label="A watershed is selected in the green supply view and the chain of watersheds carrying its water down to the outlet lights up."></video>
-      <figcaption><b>Supply</b> shades watersheds by the retained runoff they
-      deliver to exposed land, after distance decay. Selecting one follows its
-      water downstream to the outlet, through every watershed on the way.</figcaption>
+      <figcaption><b>Supply</b> is the retention delivered downstream. Selecting
+      a watershed follows its water to the outlet.</figcaption>
     </figure>
 
     <figure class="clip">
       <video data-src="assets/demand-select.mp4" data-poster="assets/demand-select.webp"
              loop muted playsinline preload="none"
              aria-label="Neighbourhoods are selected in the orange demand view, each reporting its exposed area, its share of the neighbourhood and its residents."></video>
-      <figcaption><b>Demand</b> shades neighbourhoods by the built-up land and
-      cropland inside the modelled floodplain: <b>164 km&sup2;</b> across
-      <b>24</b> communities. Each reports its own exposed area and rank.</figcaption>
+      <figcaption><b>Demand</b> is the built-up land and cropland sitting in the
+      modelled floodplain, neighbourhood by neighbourhood.</figcaption>
     </figure>
 
     <figure class="clip">
       <video data-src="assets/weights.mp4" data-poster="assets/weights.webp"
              loop muted playsinline preload="none"
              aria-label="The exposure weight sliders are moved and both the downstream neighbourhoods and the upstream watersheds are re-shaded."></video>
-      <figcaption>The sliders set how much each exposure type counts. Raising
-      cropland or built-up land re-ranks the neighbourhoods here and the
-      watersheds on the supply side at the same time.</figcaption>
+      <figcaption>The sliders set how much each exposure type counts, re-ranking
+      both sides at once.</figcaption>
     </figure>
 
     <p style="margin-top:22px">Critical facilities and population are trial
-    controls. They sit outside the retention and routing model and are provided
-    to test how a different definition of exposure would shift the ranking.</p>
-
-    <div class="stats">
-      <div><div class="v">422</div><div class="k">watersheds providing service</div></div>
-      <div><div class="v">164 km&sup2;</div><div class="k">exposed land they reach</div></div>
-    </div>
+    controls, held outside the model behind these rankings.</p>
   </section>
 
   <!-- ---------------------------------------------------------------- the close -->
   <section class="close" data-mark="Open the map">
     <p class="eyebrow">Explore it yourself</p>
     <h2>The full map runs on a desktop</h2>
-    <p>Opening this same address on a desktop or laptop loads the interactive
-    map, where every community, watershed and reading shown above can be selected
-    directly.</p>
+    <p>Opening this same address on a desktop or laptop loads the map itself,
+    where everything shown above can be selected directly.</p>
     <a class="url" href="https://qhw-isaac.github.io/lower-fraser-flood-attenuation/">qhw-isaac.github.io/lower-fraser-flood-attenuation/</a>
     <button type="button" class="go go-map">Load the map on this device</button>
     <p style="margin-top:10px;font-size:13px;color:#7d90a6">The map is built for a
@@ -742,12 +709,22 @@
       es.forEach(function(e){ if(e.isIntersecting){ load(e.target); pre.unobserve(e.target); } });
     },{rootMargin:"600px 0px"});
 
+    // Each clip is a short piece of choreography, so it runs from the start when
+    // the reader arrives at it rather than resuming wherever it was left. Half
+    // the clip has to be on screen to count as arrived.
     var play = new IntersectionObserver(function(es){
       es.forEach(function(e){
-        if(e.isIntersecting){ e.target.play().catch(function(){}); }
-        else { e.target.pause(); }
+        var v = e.target;
+        if(e.isIntersecting){
+          if(v.paused){
+            // a clip that has only just loaded is already at 0, and seeking
+            // before its metadata arrives interrupts that load
+            if(v.readyState >= 1){ try{ v.currentTime = 0; }catch(err){} }
+            v.play().catch(function(){});
+          }
+        } else if(!v.paused){ v.pause(); }
       });
-    },{rootMargin:"80px 0px"});
+    },{threshold:0.5});
 
     vids.forEach(function(v){ pre.observe(v); if(!still) play.observe(v); });
 
