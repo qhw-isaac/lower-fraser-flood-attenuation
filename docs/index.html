@@ -328,12 +328,16 @@
   #guide .hero h1{font-size:34px;line-height:1.1;font-weight:800;margin:0 0 14px;
         letter-spacing:-.025em;color:#fff}
   #guide .hero h1 em{font-style:normal;color:var(--c-eco)}
-  #guide .hero .tag{font-size:16px;color:var(--g-dim);margin:0 0 20px}
-  #guide .hero .lead{font-size:16.5px;margin:0 0 24px}
-  #guide .credits{font-size:13px;line-height:1.75;color:var(--g-dim);
-        border-top:1px solid var(--g-rule);padding-top:16px}
-  #guide .credits b{color:var(--g-ink);font-weight:650}
-  #guide .credits span{display:block}
+  #guide .hero .tag{font-size:16px;color:var(--g-dim);margin:0 0 26px}
+  #guide .credits{border-top:1px solid var(--g-rule);padding-top:18px}
+  #guide .credits .name{font-size:21px;font-weight:750;color:#fff;margin:0 0 4px;
+        letter-spacing:-.01em}
+  #guide .credits .cred{font-size:13.5px;line-height:1.6;color:var(--g-dim);
+        margin:0 0 16px}
+  #guide .credits .role{font-size:13px;line-height:1.6;color:var(--g-ink);margin:0}
+  #guide .credits .role b{display:block;font-size:10.5px;font-weight:750;
+        letter-spacing:.13em;text-transform:uppercase;color:var(--g-dim)}
+  #guide .credits .role+.role{margin-top:11px}
 
 
   /* --- part opener: numbered, coloured to match the map view --------------- */
@@ -408,62 +412,71 @@
     <p class="eyebrow">MFRE GP Showcase &middot; 21 August 2026</p>
     <h1>How <em>natural ecosystems</em> reduce flood risk</h1>
     <p class="tag">A spatial analysis of the Lower Fraser</p>
-    <p class="lead">An interactive map of the ecosystems that slow storm runoff
-    on its way to the communities below. Each of its three views is shown here in
-    use.</p>
     <div class="credits">
-      <span><b>Isaac Qi</b>, UBC Sustainability Scholar</span>
-      <span>Project partner: <b>Metro Vancouver</b></span>
-      <span>Faculty supervisor: <b>Dr. Matthew Mitchell</b></span>
+      <p class="name">Isaac Qi</p>
+      <p class="cred">Master of Food and Resource Economics<br>
+      Sustainability Scholar</p>
+      <p class="role"><b>Project Partner</b>Metro Vancouver</p>
+      <p class="role"><b>Faculty Supervisor</b>Dr. Matthew Mitchell</p>
     </div>
   </section>
 
   <!-- ------------------------------------------------------------------ part 1 -->
   <section class="part part-1" data-mark="1 &middot; <b>Community view</b>">
     <p class="num"><i>1</i>Community view</p>
-    <h2>The path storm runoff takes to a community</h2>
-    <p>Selecting a community traces the channels that drain toward it, and the
-    ecosystems along the way that hold part of the storm back.</p>
+    <h2>Contributing watersheds as storm precipitation reaches downstream
+    communities</h2>
+    <p>A visualization of the sequence of ecosystems that retain storm runoff as
+    it travels downstream.</p>
 
     <figure class="clip">
       <video data-src="assets/community-select.mp4" data-poster="assets/community-select.webp"
              loop muted playsinline preload="none"
              aria-label="Abbotsford is selected on the map, the view pulls back, and the upstream channels draining toward it are drawn in."></video>
-      <figcaption>Abbotsford, with the channels draining toward it. Darker land
-      upstream attenuates more of the runoff on its way down.</figcaption>
+      <figcaption>Clicking a community opens an animation of the watersheds
+      contributing to it. Darker areas upstream attenuate more of the runoff on
+      its way down.</figcaption>
     </figure>
 
     <figure class="clip">
       <video data-src="assets/community-compare.mp4" data-poster="assets/community-compare.webp"
              loop muted playsinline preload="none"
              aria-label="Chilliwack is added as a second community and the watersheds upstream of both turn gold."></video>
-      <figcaption>Gold marks the ground upstream of both. The same ecosystems
-      slow runoff for each city, so a change there carries to both.</figcaption>
+      <figcaption>Selecting a comparison community shows the ecosystems that
+      retain runoff for both. What happens there reaches each of them.</figcaption>
     </figure>
   </section>
 
   <!-- ------------------------------------------------------------------ part 2 -->
   <section class="part part-2" data-mark="2 &middot; <b>Upstream ecosystems</b>">
     <p class="num"><i>2</i>Upstream ecosystems</p>
-    <h2>Four readings of the same land</h2>
-    <p>Read the land itself. The same watersheds can be shaded four ways, and
-    each ranks them differently.</p>
+    <h2>Valuing upstream ecosystems in their own right</h2>
+    <p>The same watersheds seen four ways, each measuring a different part of the
+    service their ecosystems provide.</p>
+
+    <figure class="clip">
+      <video data-src="assets/upstream-ecosystems.mp4" data-poster="assets/upstream-ecosystems.webp"
+             loop muted playsinline preload="none"
+             aria-label="An upstream watershed is selected and the panel lists what it retains and the communities its outflow reaches, then the shading is switched between the four readings."></video>
+      <figcaption>Selecting an area opens what it retains and where its outflow
+      goes. Switching between the four measures re-shades the same watersheds.</figcaption>
+    </figure>
 
     <ul class="lenses">
       <li>
         <h3><span class="sw" style="background:linear-gradient(90deg,#e9f5d8,#3f9c53)"></span>With ecosystems</h3>
-        <p>What the land holds back today, from its cover, soil, slope and
+        <p>What a watershed retains today, given its cover, soil, slope and
         rainfall.</p>
       </li>
       <li>
         <h3><span class="sw" style="background:linear-gradient(90deg,#fbdcea,#c2185b)"></span>Without ecosystems</h3>
         <p>How much more of the same storm would run off if that cover were
-        lost. This ranks differently from retention.</p>
+        lost.</p>
       </li>
       <li>
         <h3><span class="sw" style="background:linear-gradient(90deg,#d9f0e8,#1d5e8c)"></span>Communities reached</h3>
         <p>How many communities an area serves. Those serving many are shared
-        assets.</p>
+        assets across jurisdictions.</p>
       </li>
       <li>
         <h3><span class="sw" style="background:linear-gradient(90deg,#dff5ee,#17537d)"></span>Distance downstream</h3>
@@ -471,61 +484,55 @@
         with distance.</p>
       </li>
     </ul>
-
-    <figure class="clip">
-      <video data-src="assets/upstream-ecosystems.mp4" data-poster="assets/upstream-ecosystems.webp"
-             loop muted playsinline preload="none"
-             aria-label="An upstream watershed is selected and the panel lists what it retains and the communities its outflow reaches, then the shading is switched between the four readings."></video>
-      <figcaption>An area opens to what it retains and where its outflow goes.
-      Switching readings re-shades the same watersheds.</figcaption>
-    </figure>
   </section>
 
   <!-- ------------------------------------------------------------------ part 3 -->
   <section class="part part-3" data-mark="3 &middot; <b>Supply &amp; demand</b>">
     <p class="num"><i>3</i>Supply &amp; demand</p>
-    <h2>Matching the service to the exposure</h2>
+    <h2>Putting it all together</h2>
     <p>Retention counts as a service only where something downstream is exposed.
-    This view separates the two sides, then weights one by the other.</p>
+    This view includes a custom weighting tool for adjusting the model inputs to
+    your own priorities.</p>
 
     <figure class="clip">
       <video data-src="assets/supply-select.mp4" data-poster="assets/supply-select.webp"
              loop muted playsinline preload="none"
              aria-label="A watershed is selected in the green supply view and the chain of watersheds carrying its runoff down to the outlet lights up."></video>
-      <figcaption><b>Supply</b> is the retention delivered downstream. Selecting
-      a watershed follows its runoff to the outlet.</figcaption>
+      <figcaption><b>Supply</b> is the retention delivered downstream.</figcaption>
     </figure>
 
     <figure class="clip">
       <video data-src="assets/demand-select.mp4" data-poster="assets/demand-select.webp"
              loop muted playsinline preload="none"
              aria-label="Neighbourhoods are selected in the orange demand view, each reporting its exposed area, its share of the neighbourhood and its residents."></video>
-      <figcaption><b>Demand</b> is the built-up land and cropland sitting in the
-      modelled floodplain, neighbourhood by neighbourhood.</figcaption>
+      <figcaption><b>Demand</b> is the downstream communities most exposed to
+      flooding in the Lower Mainland, read at the dissemination area level.</figcaption>
     </figure>
 
     <figure class="clip">
       <video data-src="assets/weights.mp4" data-poster="assets/weights.webp"
              loop muted playsinline preload="none"
              aria-label="The exposure weight sliders are moved and both the downstream neighbourhoods and the upstream watersheds are re-shaded."></video>
-      <figcaption>The sliders set how much each exposure type counts, re-ranking
-      both sides at once.</figcaption>
+      <figcaption>The weighting tool in use. Adjusting how much each exposure
+      type counts re-ranks both sides at once.</figcaption>
     </figure>
 
     <p style="margin-top:22px">Critical facilities and population are trial
-    controls, held outside the model behind these rankings.</p>
+    features, not part of the model that drove the rankings of upstream ecosystem
+    contributions.</p>
   </section>
 
   <!-- ---------------------------------------------------------------- the close -->
   <section class="close" data-mark="Open the map">
-    <p class="eyebrow">Explore it yourself</p>
-    <h2>The full map runs on a desktop</h2>
-    <p>Opening this same address on a desktop or laptop loads the map itself,
-    where everything shown above can be selected directly.</p>
+    <p class="eyebrow">Try it yourself</p>
+    <h2>The interactive map is now accessible on desktop</h2>
+    <p>Opening this same website on a desktop or laptop gives you the live map,
+    where all the features shown above can be explored.</p>
     <a class="url" href="https://qhw-isaac.github.io/lower-fraser-flood-attenuation/">qhw-isaac.github.io/lower-fraser-flood-attenuation/</a>
     <button type="button" class="go go-map">Load the map on this device</button>
     <p style="margin-top:10px;font-size:13px;color:#7d90a6">The map is built for a
-    pointer and a wide canvas. It will run here, but it will be cramped.</p>
+    wider screen. It will still run on mobile, but the map features are
+    limited.</p>
   </section>
 
 </div>
