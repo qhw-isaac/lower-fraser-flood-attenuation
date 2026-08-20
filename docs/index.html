@@ -80,9 +80,8 @@
   .card{background:var(--panel2);border:1px solid var(--line);border-radius:11px;padding:15px}
   .card h3{margin:0;font-size:15.5px;font-weight:650}
   .card .sub2{font-size:11.5px;color:var(--muted);margin:2px 0 0;text-transform:uppercase;letter-spacing:.08em}
-  /* Headline figure and its unit. The unit runs to two or three lines, so it is
-     centred against the number rather than sat on its baseline, which left the
-     number riding high with the rest of the label hanging below it. */
+  /* Headline figure and its unit. The unit runs to two or three lines, so it
+     is centred against the number rather than sat on its baseline. */
   .big{display:flex;align-items:center;gap:10px;margin:14px 0 3px}
   .big .n{font-size:30px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1}
   .big .u{font-size:12px;color:var(--muted);line-height:1.35}
@@ -176,9 +175,8 @@
         filter:drop-shadow(0 0 4px rgba(43,179,230,.85))}
   .glow-source{filter:drop-shadow(0 0 7px rgba(43,179,230,.95)) drop-shadow(0 0 3px rgba(43,179,230,.9))}
   @keyframes basinglow{0%,100%{fill-opacity:.32}50%{fill-opacity:.82}}
-  /* Selected-neighbourhood card: smaller than the region card it sits above, and
-     carrying the demand orange as an edge so the two are told apart at a glance
-     rather than read as one stack of equals. */
+  /* Selected-neighbourhood card: smaller than the region card above it, with
+     the demand orange as an edge so the two are told apart at a glance. */
   .sel-card{background:#1b2635;border:1px solid #31445b;border-left:3px solid #d1712f;
         border-radius:9px;padding:9px 12px 10px;margin-bottom:10px}
   .sel-card .lab{display:flex;align-items:center;font-size:9.5px;letter-spacing:.11em;
@@ -279,12 +277,12 @@
      --------------------------------------------------------------------------
      What a phone gets instead of the map, and the page the slide deck's QR code
      lands on. The map needs a pointer and a wide canvas, so a phone is given the
-     argument in full instead: why upstream land matters, then each of the three
-     map views as a clip of the real tool being driven.
+     argument in full instead: why upstream ecosystems matter, then each of the
+     three map views as a clip of the real tool being driven.
 
-     Sections run: opening, three framing sections, three numbered parts (one per
-     map view), close. Part accents match the colours the map uses for the same
-     view, so a reader who later opens the map recognises them.
+     Sections run: opening, three numbered parts (one per map view), close. Part
+     accents match the colours the map uses for the same view, so a reader who
+     later opens the map recognises them.
      ========================================================================== */
   html.guide, html.guide body{overflow:auto;height:auto;background:#0d1420}
   html.guide #app{display:none}
@@ -657,8 +655,8 @@
         if(v.parentNode) v.parentNode.replaceChild(d, v);
       });
       // Native loop restarts through an "ended" pause, which some mobile
-      // browsers show as a black or poster flash. Jumping back a moment
-      // before the clip actually ends skips that step, so the loop is silent.
+      // browsers show as a black or poster flash. Jumping back just before
+      // the clip ends skips that step.
       if(!still){
         v.addEventListener("timeupdate", function(){
           if(v.duration && v.currentTime > v.duration - 0.15) v.currentTime = 0;
@@ -677,9 +675,7 @@
 
     // Full screen, which on a phone also means landscape, is where the panel
     // figures in these desktop recordings become readable. Locking the
-    // orientation there turns the clip sideways at once, which is what gets a
-    // reader to actually rotate the phone rather than squint at a small
-    // letterboxed video.
+    // orientation there prompts the reader to rotate the phone to match.
     function big(v){
       var f = v.requestFullscreen || v.webkitRequestFullscreen
            || v.webkitEnterFullscreen;      // iOS Safari, video element only
