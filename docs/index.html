@@ -690,14 +690,28 @@
     // state through its own pair of events on the video.
     function fsNow(){ return document.fullscreenElement || document.webkitFullscreenElement || null; }
     function isFs(v){ return v.dataset.fs === "1" || fsNow() === v; }
+    // half on screen, the same bar the observer below plays a clip at
+    function inView(v){
+      var r = v.getBoundingClientRect(),
+          h = window.innerHeight || document.documentElement.clientHeight;
+      return r.height ? (Math.min(r.bottom, h) - Math.max(r.top, 0)) / r.height >= 0.5 : false;
+    }
+    // Observer callbacks are delivered a frame late, so the ratio-0 readings
+    // taken while the clip sat outside the page's flow arrive after the exit
+    // event and pause it again, which left the page paused behind the reader.
+    // Hold those off for a moment, then hand the observer a fresh reading so
+    // its next decision comes from where the clip actually is.
+    var fsSettleUntil = 0;
     function resumeAfterFs(){
       if(still) return;
+      fsSettleUntil = Date.now() + 600;
       vids.forEach(function(v){
-        if(isFs(v) || !v.paused) return;
-        var r = v.getBoundingClientRect(),
-            h = window.innerHeight || document.documentElement.clientHeight;
-        if(r.bottom > 0 && r.top < h) v.play().catch(function(){});
+        if(!isFs(v) && v.paused && inView(v)) v.play().catch(function(){});
       });
+      setTimeout(function(){
+        if(!play) return;
+        vids.forEach(function(v){ try{ play.unobserve(v); play.observe(v); }catch(e){} });
+      }, 650);
     }
     // The recordings are wide desktop screens, so full screen is only worth
     // opening in landscape. Turning the phone for the reader is the whole point
@@ -751,6 +765,7 @@
         if(e.intersectionRatio >= 0.5){
           if(v.paused) v.play().catch(function(){});
         } else {
+          if(Date.now() < fsSettleUntil) return;   // stale full-screen reading
           if(!v.paused) v.pause();
           if(!e.isIntersecting && v.readyState >= 1){
             try{ v.currentTime = 0; }catch(err){}
