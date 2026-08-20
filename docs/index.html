@@ -414,7 +414,7 @@
 
     <figure class="clip">
       <video data-src="assets/community-select.mp4" data-poster="assets/community-select.webp"
-             loop muted playsinline preload="none"
+             muted playsinline preload="none"
              aria-label="Abbotsford is selected on the map, the view pulls back, and the upstream channels draining toward it are drawn in."></video>
       <figcaption>Clicking a community draws every watershed that contributes to
       it, along with the channels carrying runoff downwards. Darker areas
@@ -423,7 +423,7 @@
 
     <figure class="clip">
       <video data-src="assets/community-compare.mp4" data-poster="assets/community-compare.webp"
-             loop muted playsinline preload="none"
+             muted playsinline preload="none"
              aria-label="Chilliwack is added as a second community and the watersheds upstream of both turn gold."></video>
       <figcaption>Adding a second community shows the ecosystems that
       contribute to both areas.</figcaption>
@@ -441,7 +441,7 @@
 
     <figure class="clip">
       <video data-src="assets/upstream-ecosystems.mp4" data-poster="assets/upstream-ecosystems.webp"
-             loop muted playsinline preload="none"
+             muted playsinline preload="none"
              aria-label="An upstream watershed is selected and the panel lists what it retains and the communities its outflow reaches, then the shading is switched between the four readings."></video>
       <figcaption>Selecting a watershed opens what it retains and where that
       retention travels. The map's shading updates with each measure.</figcaption>
@@ -484,7 +484,7 @@
 
     <figure class="clip">
       <video data-src="assets/supply-select.mp4" data-poster="assets/supply-select.webp"
-             loop muted playsinline preload="none"
+             muted playsinline preload="none"
              aria-label="A watershed is selected in the green supply view and the chain of watersheds carrying its runoff down to the outlet lights up."></video>
       <figcaption><b>Supply</b> is the ecosystem service delivered downstream
       by each upstream area.</figcaption>
@@ -492,7 +492,7 @@
 
     <figure class="clip">
       <video data-src="assets/demand-select.mp4" data-poster="assets/demand-select.webp"
-             loop muted playsinline preload="none"
+             muted playsinline preload="none"
              aria-label="Neighbourhoods are selected in the orange demand view, each reporting its exposed area, its share of the neighbourhood and its residents."></video>
       <figcaption><b>Demand</b> is the built-up land and cropland sitting inside
       the modelled floodplain, read one dissemination area at a time.</figcaption>
@@ -500,7 +500,7 @@
 
     <figure class="clip">
       <video data-src="assets/weights.mp4" data-poster="assets/weights.webp"
-             loop muted playsinline preload="none"
+             muted playsinline preload="none"
              aria-label="The exposure weight sliders are moved and both the downstream neighbourhoods and the upstream watersheds are re-shaded."></video>
       <figcaption>The weighting tool in action. Changing how much each kind of
       exposure counts re-ranks the watersheds upstream and the neighbourhoods
@@ -656,6 +656,15 @@
         if(b) b.remove();
         if(v.parentNode) v.parentNode.replaceChild(d, v);
       });
+      // Native loop restarts through an "ended" pause, which some mobile
+      // browsers show as a black or poster flash. Jumping back a moment
+      // before the clip actually ends skips that step, so the loop is silent.
+      if(!still){
+        v.addEventListener("timeupdate", function(){
+          if(v.duration && v.currentTime > v.duration - 0.15) v.currentTime = 0;
+        });
+        v.addEventListener("ended", function(){ v.currentTime = 0; v.play().catch(function(){}); });
+      }
     });
 
     function load(v){
@@ -663,17 +672,37 @@
       v.preload = "metadata";               // so a missing clip reports back
       v.poster  = v.getAttribute("data-poster") || "";
       v.src     = v.getAttribute("data-src");
-      if(still){ v.controls = true; v.removeAttribute("loop"); }
+      if(still) v.controls = true;
     }
 
     // Full screen, which on a phone also means landscape, is where the panel
-    // figures in these desktop recordings become readable.
+    // figures in these desktop recordings become readable. Locking the
+    // orientation there turns the clip sideways at once, which is what gets a
+    // reader to actually rotate the phone rather than squint at a small
+    // letterboxed video.
     function big(v){
       var f = v.requestFullscreen || v.webkitRequestFullscreen
            || v.webkitEnterFullscreen;      // iOS Safari, video element only
-      if(f){ try{ f.call(v); }catch(e){} }
+      if(f){
+        try{
+          var r = f.call(v);
+          if(r && r.then) r.then(lockLandscape, function(){});
+          else lockLandscape();
+        }catch(e){}
+      }
       v.play().catch(function(){});
     }
+    function lockLandscape(){
+      try{ if(screen.orientation && screen.orientation.lock) screen.orientation.lock("landscape").catch(function(){}); }
+      catch(e){}
+    }
+    ["fullscreenchange","webkitfullscreenchange"].forEach(function(evt){
+      document.addEventListener(evt, function(){
+        if(!document.fullscreenElement && !document.webkitFullscreenElement && screen.orientation && screen.orientation.unlock){
+          try{ screen.orientation.unlock(); }catch(e){}
+        }
+      });
+    });
     vids.forEach(function(v){
       v.addEventListener("click", function(){ big(v); });
       var b = document.createElement("button");
