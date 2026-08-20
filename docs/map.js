@@ -320,13 +320,11 @@ function computeDemand(){
     Object.keys(DA_DEMAND).forEach(id=>{ daDemand[id]=daExposure(id);
       const m=DA_DEMAND[id].muni; (daByMuni[m]=daByMuni[m]||[]).push(id); });
   }
-  // The scale is fixed at the model's own weighting, ONCE, and never moves with
-  // the sliders. Rebuilding it per weighting made the map read backwards:
-  // population is concentrated in the small urban neighbourhoods, so raising
-  // that weight lifted the floor of the scale far faster than its ceiling, and
-  // the whole map went lighter as the weight went up. A weight now moves the
-  // values against a fixed scale, which is the only way the change is legible.
-  // Values past the top clamp to the darkest shade.
+  // The scale is set once, at the model's own weighting, and never moves with
+  // the sliders: a weight reads as a change only against a fixed scale.
+  // Rebuilt per weighting it inverts, since population sits in the small urban
+  // neighbourhoods and raising that weight lifts the floor faster than the
+  // ceiling. Values past the top clamp to the darkest shade.
   if(!EXP_SET){
     const dv=Object.values(daDemand).filter(x=>x>0).sort((a,b)=>a-b);
     EXP_LO=dv.length?Math.max(1e-4,dv[Math.floor(dv.length*0.10)]):1e-3;
@@ -1145,7 +1143,7 @@ function styleSub(p){
   // Barrier units are land watersheds holding a terminal water body. They still
   // retain runoff, it just buffers that water body rather than flowing on, so
   // in the lenses that ask who is downstream they take a warm neutral rather
-  // than the blank white that read as unimportant. The LAKES overlay draws the
+  // than the blank white that reads as unimportant. The LAKES overlay draws the
   // water body itself and the hover tooltip explains the severing.
   if(p.barrier && !landReading && !demandView && !dimmed && !cityLens)
     return {fillColor:BARRIER_FILL,fillOpacity:on?0.7:0,weight:1.4,
@@ -1521,10 +1519,8 @@ function chainSource(){
   return mode==="ledger" ? (ledgerSel&&ledgerSel.t==="area"?ledgerSel.id:null) : selSub;
 }
 // Pick a neighbourhood from the ranked list: exactly the selection a map click
-// makes, and nothing else. It used to fly the map to the neighbourhood, on the
-// grounds that a row carries a name and no location, but the picked shape now
-// stands out well enough to find without being flown to, and holding the view
-// still keeps the reader's place in the map they were already reading.
+// makes, and nothing else. The view holds still, since the picked shape carries
+// its own mark and moving the map costs the reader their place.
 function pickDa(id){ selectInLedger("da",id); }
 // jump straight to a two-community comparison (the ranked pair lists use this)
 function openPair(a,b){ selCity=a; cmpCity=b; cmpOpen=true; applyMuniMode(); }
@@ -1565,13 +1561,10 @@ function legendForSub(){
 const focusRow=()=>(focusOnly&&subBy==="gain")
   ? `<div class="row" style="margin-top:8px"><span class="sw" style="background:${FAINT}"></span>does not reach the Lower Fraser</div>` : "";
 
-// The picked neighbourhood's card, at the top of the panel. Deliberately
-// smaller and warmer than the region card under it: at equal weight the two
-// read as competing answers to "what am I looking at", when one names the
-// neighbourhood picked and the other describes the whole region. It was tried
-// as a map popup, which put the figures where the place is but covered the
-// ground being read, so it came back here in a form that cannot be mistaken
-// for the region's own card.
+// The picked neighbourhood's card, at the top of the panel. Smaller and warmer
+// than the region card under it: at equal weight the two read as competing
+// answers to "what am I looking at", when one names the neighbourhood picked
+// and the other describes the whole region.
 function daCard(id){
   const d=DA_DEMAND[id]; if(!d) return "";
   const a=daArea(id), share=d.km2>0?100*a/d.km2:0;
