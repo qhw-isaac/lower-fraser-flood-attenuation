@@ -372,6 +372,7 @@
   #guide .lenses .sw{display:inline-block;width:26px;height:9px;border-radius:3px;
         margin-right:8px;vertical-align:middle;transform:translateY(-1px)}
   #guide .lenses p{font-size:14.5px;line-height:1.55;margin:0;color:var(--g-dim)}
+  #guide .note{font-size:14.5px;line-height:1.55;color:var(--g-dim);margin-top:22px}
 
   /* --- close --------------------------------------------------------------- */
   #guide .close{text-align:left}
@@ -396,7 +397,7 @@
     <p class="tag">A spatial analysis of the Lower Fraser</p>
     <div class="credits">
       <p class="role"><b>Author</b>Isaac Qi
-        <span>Master of Food and Resource Economics, UBC Sustainability Scholar</span></p>
+        <span>Master of Food and Resource Economics<br>UBC Sustainability Scholar</span></p>
       <p class="role"><b>Project Partner</b>Metro Vancouver</p>
       <p class="role"><b>Faculty Supervisor</b>Dr. Matthew Mitchell</p>
     </div>
@@ -407,16 +408,17 @@
     <p class="num"><i>1</i>Community view</p>
     <h2>Following storm runoff downstream</h2>
     <p>Rain that falls in the headwaters passes through a long sequence of
-    ecosystems before it reaches the communities below. This view traces that
-    sequence for any community in the region.</p>
+    ecosystems before it reaches the communities below. The community view
+    visualizes the above sequence for any community in Metro Vancouver and the
+    Fraser Valley Regional District.</p>
 
     <figure class="clip">
       <video data-src="assets/community-select.mp4" data-poster="assets/community-select.webp"
              loop muted playsinline preload="none"
              aria-label="Abbotsford is selected on the map, the view pulls back, and the upstream channels draining toward it are drawn in."></video>
       <figcaption>Clicking a community draws every watershed that contributes to
-      it, along with the channels carrying runoff down. Darker areas attenuate
-      more of the storm on the way.</figcaption>
+      it, along with the channels carrying runoff downwards. Darker areas
+      attenuate more of the storm along the way.</figcaption>
     </figure>
 
     <figure class="clip">
@@ -432,42 +434,41 @@
   <section class="part part-2">
     <p class="num"><i>2</i>Upstream ecosystems</p>
     <h2>Seeing what these ecosystems already do</h2>
-    <p>This view reads each watershed four ways. It shows what the watershed
+    <p>This view visualizes each watershed in four different ways: what it
     holds back today, what its loss would send downstream, how many
     communities benefit from its retention, and how far that contribution
-    carries.</p>
+    travels.</p>
 
     <figure class="clip">
       <video data-src="assets/upstream-ecosystems.mp4" data-poster="assets/upstream-ecosystems.webp"
              loop muted playsinline preload="none"
              aria-label="An upstream watershed is selected and the panel lists what it retains and the communities its outflow reaches, then the shading is switched between the four readings."></video>
       <figcaption>Selecting a watershed opens what it retains and where that
-      retention travels. Each measure re-shades the region.</figcaption>
+      retention travels. The map's shading updates with each measure.</figcaption>
     </figure>
 
     <ul class="lenses">
       <li>
         <h3><span class="sw" style="background:linear-gradient(90deg,#e9f5d8,#3f9c53)"></span>With ecosystems</h3>
         <p>The runoff a watershed absorbs during the storm, given its cover, soil
-        and slope. This retention already exists today.</p>
+        type and slope. This view shows existing retention.</p>
       </li>
       <li>
         <h3><span class="sw" style="background:linear-gradient(90deg,#fbdcea,#c2185b)"></span>Without ecosystems</h3>
-        <p>The extra runoff the same storm would send downstream if that cover
-        were cleared. The areas with most to lose are not always the ones holding
-        back the most today.</p>
+        <p>The extra runoff the same storm would send downstream if the natural
+        landcover in each watershed were cleared.</p>
       </li>
       <li>
         <h3><span class="sw" style="background:linear-gradient(90deg,#d9f0e8,#1d5e8c)"></span>Communities reached</h3>
         <p>How many communities benefit from a single watershed's retention. A
-        high count means the contribution crosses municipal boundaries, so
-        responsibility for that watershed is shared.</p>
+        high count means the benefit reaches multiple communities, sometimes
+        crossing more than one boundary.</p>
       </li>
       <li>
         <h3><span class="sw" style="background:linear-gradient(90deg,#dff5ee,#17537d)"></span>Distance downstream</h3>
-        <p>How far a contribution travels before it fades. This measure orients
-        more than it ranks, showing which ecosystems sit nearest the communities
-        they serve.</p>
+        <p>How far a contribution travels before it fades. This measure is
+        focused on orienting the user, showing which ecosystems sit nearest the
+        communities they serve.</p>
       </li>
     </ul>
   </section>
@@ -485,29 +486,29 @@
       <video data-src="assets/supply-select.mp4" data-poster="assets/supply-select.webp"
              loop muted playsinline preload="none"
              aria-label="A watershed is selected in the green supply view and the chain of watersheds carrying its runoff down to the outlet lights up."></video>
-      <figcaption><b>Supply</b> is the retention delivered downstream.</figcaption>
+      <figcaption><b>Supply</b> is the ecosystem service delivered downstream
+      by each upstream area.</figcaption>
     </figure>
 
     <figure class="clip">
       <video data-src="assets/demand-select.mp4" data-poster="assets/demand-select.webp"
              loop muted playsinline preload="none"
              aria-label="Neighbourhoods are selected in the orange demand view, each reporting its exposed area, its share of the neighbourhood and its residents."></video>
-      <figcaption><b>Demand</b> is the exposure that service meets. It is the
-      built-up land and cropland sitting inside the modelled floodplain, read
-      one dissemination area at a time.</figcaption>
+      <figcaption><b>Demand</b> is the built-up land and cropland sitting inside
+      the modelled floodplain, read one dissemination area at a time.</figcaption>
     </figure>
 
     <figure class="clip">
       <video data-src="assets/weights.mp4" data-poster="assets/weights.webp"
              loop muted playsinline preload="none"
              aria-label="The exposure weight sliders are moved and both the downstream neighbourhoods and the upstream watersheds are re-shaded."></video>
-      <figcaption>The weighting tool in use. Changing how much each kind of
+      <figcaption>The weighting tool in action. Changing how much each kind of
       exposure counts re-ranks the watersheds upstream and the neighbourhoods
       downstream together.</figcaption>
     </figure>
 
-    <p style="margin-top:22px">Critical facilities and population are trial
-    features. Neither takes part in the model behind these rankings.</p>
+    <p class="note">Critical facilities and population are trial features.
+    Neither takes part in the model behind these rankings.</p>
   </section>
 
   <!-- ---------------------------------------------------------------- the close -->
@@ -519,7 +520,7 @@
     <a class="url" href="https://qhw-isaac.github.io/lower-fraser-flood-attenuation/">qhw-isaac.github.io/lower-fraser-flood-attenuation/</a>
     <button type="button" class="go go-map">Load the map on this device</button>
     <p style="margin-top:10px;font-size:13px;color:#7d90a6">The map is built for a
-    wider screen. It will still run on a phone, but the features are limited.</p>
+    wider screen. It will still run on mobile, though features are limited.</p>
   </section>
 
 </div>
