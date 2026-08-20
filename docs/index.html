@@ -671,14 +671,57 @@
     }
 
     // Full screen, which on a phone also means landscape, is where the panel
-    // figures in these desktop recordings become readable.
+    // figures in these desktop recordings become readable. The clip restarts on
+    // the way in, so the reader gets the whole sequence rather than joining it
+    // at whatever point they happened to tap.
     function big(v){
       var f = v.requestFullscreen || v.webkitRequestFullscreen
            || v.webkitEnterFullscreen;      // iOS Safari, video element only
       if(f){ try{ f.call(v); }catch(e){} }
+      try{ v.currentTime = 0; }catch(e){}
       v.play().catch(function(){});
     }
+
+    // Full screen lifts the clip out of the page's layout, so the in-view
+    // observer below reads it as gone and pauses it; on the way back the ratio
+    // never re-crosses and it stays paused. Track the state instead, leave a
+    // full-screen clip alone, and pick playback up again on exit. iOS Safari
+    // runs its own player and sets no fullscreenElement, so it reports the
+    // state through its own pair of events on the video.
+    function fsNow(){ return document.fullscreenElement || document.webkitFullscreenElement || null; }
+    function isFs(v){ return v.dataset.fs === "1" || fsNow() === v; }
+    function resumeAfterFs(){
+      if(still) return;
+      vids.forEach(function(v){
+        if(isFs(v) || !v.paused) return;
+        var r = v.getBoundingClientRect(),
+            h = window.innerHeight || document.documentElement.clientHeight;
+        if(r.bottom > 0 && r.top < h) v.play().catch(function(){});
+      });
+    }
+    // The recordings are wide desktop screens, so full screen is only worth
+    // opening in landscape. Turning the phone for the reader is the whole point
+    // of the control. This runs off the event rather than the request, so a
+    // browser that refuses the lock cannot take the full screen down with it.
+    function turnLandscape(){
+      var o = window.screen && screen.orientation;
+      if(!o) return;
+      try{
+        if(fsNow()){
+          if(o.lock){ var p = o.lock("landscape"); if(p && p.catch) p.catch(function(){}); }
+        } else if(o.unlock){ o.unlock(); }
+      }catch(e){}
+    }
+    function onFsChange(){
+      turnLandscape();
+      if(!fsNow()) resumeAfterFs();
+    }
+    document.addEventListener("fullscreenchange", onFsChange);
+    document.addEventListener("webkitfullscreenchange", onFsChange);
+
     vids.forEach(function(v){
+      v.addEventListener("webkitbeginfullscreen", function(){ v.dataset.fs = "1"; });
+      v.addEventListener("webkitendfullscreen", function(){ v.dataset.fs = "0"; resumeAfterFs(); });
       v.addEventListener("click", function(){ big(v); });
       var b = document.createElement("button");
       b.type = "button"; b.className = "zoom"; b.textContent = "Enlarge";
@@ -704,6 +747,7 @@
     var play = new IntersectionObserver(function(es){
       es.forEach(function(e){
         var v = e.target;
+        if(isFs(v)) return;                 // full screen: not the page's to drive
         if(e.intersectionRatio >= 0.5){
           if(v.paused) v.play().catch(function(){});
         } else {
