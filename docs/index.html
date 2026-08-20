@@ -339,10 +339,14 @@
 
   /* --- a clip of the tool in use ------------------------------------------- */
   #guide .clip{margin:22px 0 0;position:relative}
-  /* the recordings are full desktop screens; the clip's own ratio replaces this
-     once its metadata arrives, but matching it up front avoids a layout jump */
+  /* The recordings are full desktop screens; the clip's own ratio replaces this
+     once its metadata arrives, but matching it up front avoids a layout jump.
+     The poster is also painted as the element's background (set in JS): with a
+     colour alone, any moment the decoder has no frame to show landed on a flat
+     near-white panel, which is the flash seen at a loop restart. */
   #guide .clip video{width:100%;display:block;border-radius:12px;
-        border:1px solid var(--g-rule);background:#eef2f6;aspect-ratio:15/8}
+        border:1px solid var(--g-rule);background-color:#eef2f6;
+        background-size:cover;background-position:center;aspect-ratio:15/8}
   /* a clip that is not on the server yet: its description, in its place */
   #guide .clip .miss{display:flex;flex-direction:column;align-items:center;
         justify-content:center;gap:8px;text-align:center;padding:26px 22px;
@@ -658,8 +662,10 @@
 
     function load(v){
       if(v.src) return;
+      var p = v.getAttribute("data-poster") || "";
       v.preload = "metadata";               // so a missing clip reports back
-      v.poster  = v.getAttribute("data-poster") || "";
+      v.poster  = p;
+      if(p) v.style.backgroundImage = "url('" + p + "')";
       v.src     = v.getAttribute("data-src");
       if(still){ v.controls = true; v.removeAttribute("loop"); }
     }
@@ -692,19 +698,22 @@
 
     // Each clip is a short piece of choreography, so it runs from the start when
     // the reader arrives at it rather than resuming wherever it was left. Half
-    // the clip has to be on screen to count as arrived. The rewind happens on the
-    // way out, where the seek repaints off screen instead of flashing in view.
+    // the clip has to be on screen to count as arrived, but the rewind waits
+    // until it has left the screen entirely: seeking at the halfway mark put the
+    // repaint in front of a reader who could still see half the clip.
     var play = new IntersectionObserver(function(es){
       es.forEach(function(e){
         var v = e.target;
-        if(e.isIntersecting){
+        if(e.intersectionRatio >= 0.5){
           if(v.paused) v.play().catch(function(){});
-        } else if(!v.paused){
-          v.pause();
-          if(v.readyState >= 1){ try{ v.currentTime = 0; }catch(err){} }
+        } else {
+          if(!v.paused) v.pause();
+          if(!e.isIntersecting && v.readyState >= 1){
+            try{ v.currentTime = 0; }catch(err){}
+          }
         }
       });
-    },{threshold:0.5});
+    },{threshold:[0, 0.5]});
 
     vids.forEach(function(v){ pre.observe(v); if(!still) play.observe(v); });
   }
