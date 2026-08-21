@@ -1,4 +1,12 @@
 # ==============================================================================
+# RETIRED 2026-08-21. Moved out of the pipeline: the report no longer draws on
+# these figures, and the published results are the data package
+# (R/99_data_package.R) and the interactive map (R/99_interactive_map.R). The
+# figures already written to output/figures/ are unaffected. Still runnable with
+# source("R/extensions/99_figures_tables.R") if a figure is wanted again.
+# ==============================================================================
+
+# ==============================================================================
 # 99_figures_tables.R: Publication-ready figures + summary table
 # ------------------------------------------------------------------------------
 # Reads finished artefacts and produces report-quality outputs. Every map shows

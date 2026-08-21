@@ -45,7 +45,7 @@ R/
 ├── 12_realized_benefit.R     realized benefit = provision × demand, ranked
 ├── 13_population.R           benefiting population (Census dissemination areas)
 │
-├── 99_figures_tables.R       report figures + summary tables
+├── 99_data_package.R         publishable spatial data package (output/data_package/)
 ├── 99_interactive_map.R      interactive web map (output/interactive_map/)
 ```
 
@@ -65,9 +65,10 @@ Raw datasets are downloaded manually and placed into `data/raw/<local_path>` as 
 
 | Folder | Contents |
 |--------|----------|
-| `output/figures/` | maps and charts |
-| `output/shapefiles/` | shapefiles |
+| `output/data_package/` | publishable data package: GeoPackage, GeoJSON, shapefiles, CSV, COG rasters, dictionary, metadata |
 | `output/interactive_map/` | interactive map |
+| `output/figures/` | QA previews, and the report figures the retired figures script wrote |
+| `output/tables/` | summary tables |
 
 ---
 
@@ -81,8 +82,9 @@ for (f in sort(list.files("R", pattern = "^[0-9]{2}_.*\\.R$", full.names = TRUE)
   message("→ ", f); source(f)
 }
 
-# 3. Generate figures and tables
-source("R/99_figures_tables.R")
+# 3. Build the deliverables
+source("R/99_data_package.R")     # output/data_package/
+source("R/99_interactive_map.R")  # output/interactive_map/data.js
 ```
 
 Key parameters are defined in `R/00_setup.R`:
