@@ -67,25 +67,12 @@ Raw datasets are downloaded manually and placed into `data/raw/<local_path>` as 
 |--------|----------|
 | `output/data_package/` | publishable data package: GeoPackage, GeoJSON, shapefiles, CSV, COG rasters, dictionary, metadata |
 | `output/interactive_map/` | interactive map |
-| `output/figures/` | QA previews, and the report figures the retired figures script wrote |
+| `output/figures/` | QA previews |
 | `output/tables/` | summary tables |
 
 ---
 
 ## Reproducibility
-
-```r
-# 1. Place all datasets from data_sources.csv into data/raw/
-
-# 2. Run the pipeline in order
-for (f in sort(list.files("R", pattern = "^[0-9]{2}_.*\\.R$", full.names = TRUE))) {
-  message("→ ", f); source(f)
-}
-
-# 3. Build the deliverables
-source("R/99_data_package.R")     # output/data_package/
-source("R/99_interactive_map.R")  # output/interactive_map/data.js
-```
 
 Key parameters are defined in `R/00_setup.R`:
 - CRS: EPSG:3005 (NAD83 / BC Albers)
@@ -97,4 +84,4 @@ Key parameters are defined in `R/00_setup.R`:
 
 ## License & Attribution
 
-See `data_sources.csv` for per-dataset licenses. Pipeline code is provided for Metro Vancouver's internal use as part of the UBC Sustainability Scholars program.
+See `data_sources.csv` for per-dataset licenses. Final deliverables are prepared for Metro Vancouver's internal use as part of the UBC Sustainability Scholars program.
