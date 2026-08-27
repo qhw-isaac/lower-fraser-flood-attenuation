@@ -607,7 +607,7 @@ map.createPane("overlay").style.zIndex=436; // downstream designation overlays (
 // drops the hillshade and makes CARTO fully opaque.
 const hillshade = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}",{
   attribution:'Hillshade &copy; Esri',maxZoom:19}).addTo(map);
-const baseLight = L.tileLayer("https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png",{
+const baseLight = L.tileLayer("https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png?key=cb1_2dnm_1_e3878546b36cf7821f3d213b",{
   attribution:'&copy; OpenStreetMap, &copy; CARTO',subdomains:"abcd",maxZoom:19,opacity:0.85}).addTo(map);
 function setTerrain(on){ if(on){ hillshade.addTo(map); baseLight.setOpacity(0.85); }
   else { map.removeLayer(hillshade); baseLight.setOpacity(1); } }
