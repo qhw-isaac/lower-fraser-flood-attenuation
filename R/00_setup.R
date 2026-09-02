@@ -51,13 +51,18 @@ HALFLIFE_KM <- 20 # distance-decay half-life for routing
 MAX_FLOW_DIST_KM <- 100 # upstream flow-distance cap (~5 half-lives)
 EDGE_BUFFER_M <- 5000 # raster-clip buffer around supply AOI
 FAC_BUFFER_M <- 250 # floodplain buffer for coordinate based demand
-LAKE_BARRIER_KM2 <- 10 # lake area that breaks routing (storage absorbs inflow)
+FLOOD_DEPTH_MIN_M <- 0 # min depth counted as flooded (JRC floor is 0.1 m)
+BORDER_LAT <- 49 # the admin border between BC and the US
 LAKE_COVER_FRAC <- 0.5 # min share of a unit a barrier lake must cover
+POP_UNIT <- "DA" # census unit for benefiting population: "DA" or "DB"
 
-# dammed reservoirs that break routing regardless of size
-RESERVOIR_NAMES <- c("Capilano Lake", "Seymour Lake", "Coquitlam Lake",
+# waterbodies that break routing
+RESERVOIR_NAMES <- c("Capilano Lake", "Seymour Lake", "Coquitlam Lake", # dams
                      "Buntzen Lake", "Alouette Lake", "Stave Lake",
-                     "Hayward Lake", "Wahleach Lake")
+                     "Hayward Lake", "Wahleach Lake",
+                     "Carpenter Lake", "Seton Lake") # BC Hydro-regulated
+BARRIER_LAKE_NAMES <- c("Harrison Lake")
+BARRIER_WATERBODIES <- c(RESERVOIR_NAMES, BARRIER_LAKE_NAMES)
 
 # default precipitation scenario = atmospheric river event of 2021
 DEFAULT_SCENARIO <- Sys.getenv("FLOOD_SCENARIO", "ar2021")
@@ -105,18 +110,13 @@ read_aoi <- function(role = c("upstream", "downstream", "downstream_land")) {
   sf::st_read(file.path(paths()$processed, paste0("01_aoi_", role, ".gpkg")), quiet = TRUE)
 }
 
-# the demand AOI as it should be drawn. Regional-district boundaries run far out
-# into the Strait of Georgia, so on a map framed on land data the border leaves
-# the panel mid-line. 01 writes a coast-clipped copy that closes on the
-# shoreline. Falls back to the administrative polygon if that copy is missing.
+# the demand AOI clipped to the coast
 aoi_display <- function() {
   f <- file.path(paths()$processed, "01_aoi_downstream_land.gpkg")
   if (file.exists(f)) sf::st_read(f, quiet = TRUE) else read_aoi("downstream")
 }
 
-# bounding box spanning several layers, so a map framed on one does not clip
-# another drawn on top. Accepts sf and terra objects, returns xlim/ylim for
-# terra::plot().
+# bounding box to prevent cross layer clipping
 span_bbox <- function(..., pad = 0.02) {
   as_box <- function(x) {
     if (inherits(x, c("SpatRaster", "SpatVector", "SpatExtent"))) {
@@ -138,7 +138,6 @@ span_bbox <- function(..., pad = 0.02) {
 }
 
 # empty 30 m raster over the AOI, snapped to clean WORKING_RES_M multiples
-# 03_lulc.R is the only script that builds the grid from the AOI
 grid_template <- function(aoi = read_aoi("upstream")) {
   e <- terra::ext(terra::vect(aoi))
   res <- WORKING_RES_M
@@ -163,15 +162,20 @@ align_to_grid <- function(r, method = "near", template = NULL) {
 # ==============================================================================
 # HELPERS: census geography
 # ==============================================================================
-# 2021 Census dissemination areas (DAs) over the downstream AOI. DAs are the
-# finest standard census geography (400-700 people), finer than the census
-# subdivisions that span many watersheds.
+# 2021 Census population units over the downstream AOI, at whichever geography
+# POP_UNIT names. "DA" is dissemination areas, the default and what every
+# published figure was built on. "DB" is dissemination blocks: 18,293 over this
+# AOI against 4,139 DAs, so the floodplain split in 13 apportions over a much
+# smaller unit. Block counts are noisier, and the AOI clip bites tighter, since
+# a DA on the edge brings its whole population where only the blocks that
+# actually touch are kept.
 #
-# Built from two StatCan downloads: the national DA boundary file, and the
-# geographic attribute file, which counts population by dissemination block and
-# is summed to DA here.
+# Built from the national boundary file and the geographic attribute file,
+# which counts population by block: summed to DA in DA mode, joined straight on
+# in DB. Returns POP_UID (the unit's own id) and DAUID for labelling.
+read_das <- function(unit = POP_UNIT) {
+  unit <- match.arg(toupper(unit), c("DA", "DB"))
 
-read_das <- function() {
   pick <- function(nms, prefix, what) {
     hit <- grep(paste0("^", prefix), nms, value = TRUE, ignore.case = TRUE)[1]
     if (is.na(hit)) {
@@ -181,28 +185,42 @@ read_das <- function() {
     hit
   }
 
-  # DA geometry, clipped to the downstream AOI
-  bnd <- sf::st_read(data_path("da_boundary_2021"), quiet = TRUE) |>
+  src <- if (unit == "DA") "da_boundary_2021" else "db_boundary_2021"
+  id_prefix <- if (unit == "DA") "DAUID" else "DBUID"
+
+  # Unit geometry, clipped to the downstream AOI. The block file is 708 MB over
+  # 498k features, so let GDAL do the extent clip via wkt_filter.
+  f <- data_path(src)
+  aoi <- sf::st_union(read_aoi("downstream"))
+  lyr_crs <- sf::st_layers(f)$crs[[1]]
+  filt <- sf::st_as_text(sf::st_as_sfc(sf::st_bbox(
+    if (is.na(lyr_crs)) aoi else sf::st_transform(aoi, lyr_crs))))
+  bnd <- sf::st_read(f, wkt_filter = filt, quiet = TRUE) |>
     sf::st_transform(PROJECT_CRS)
-  bnd$DAUID <- as.character(bnd[[pick(names(bnd), "DAUID", "DA id")]])
-  keep <- lengths(sf::st_intersects(
-    bnd, sf::st_union(read_aoi("downstream")))) > 0
-  bnd <- bnd[keep, "DAUID"]
+  bnd$POP_UID <- as.character(bnd[[pick(names(bnd), id_prefix, paste(unit, "id"))]])
+  # the filter works on bounding boxes, so trim to the AOI itself
+  keep <- lengths(sf::st_intersects(bnd, aoi)) > 0
+  bnd <- bnd[keep, "POP_UID"]
 
   gaf <- readr::read_csv(data_path("da_population_2021"),
                          show_col_types = FALSE, guess_max = 50000)
   pop_tbl <- dplyr::tibble(
-      DAUID = as.character(gaf[[pick(names(gaf), "DAUID", "DA id")]]),
+      POP_UID = as.character(gaf[[pick(names(gaf), id_prefix, paste(unit, "id"))]]),
       pop = suppressWarnings(
         as.numeric(gaf[[pick(names(gaf), "DBPOP", "block population")]]))) |>
-    dplyr::group_by(DAUID) |>
+    dplyr::group_by(POP_UID) |>
     dplyr::summarise(COUNT_TOTAL = sum(pop, na.rm = TRUE), .groups = "drop")
 
-  # a DA with no block record holds no residents, so counted as zero
-  bnd |>
-    dplyr::left_join(pop_tbl, by = "DAUID") |>
+  # a unit with no block record holds no residents, so counted as zero
+  out <- bnd |>
+    dplyr::left_join(pop_tbl, by = "POP_UID") |>
     dplyr::mutate(COUNT_TOTAL = dplyr::coalesce(COUNT_TOTAL, 0)) |>
     sf::st_make_valid()
+  # a DBUID is its DAUID plus a block suffix, so the DA falls out of the id
+  out$DAUID <- if (unit == "DA") out$POP_UID else substr(out$POP_UID, 1, 8)
+  message("  \u00b7 population unit = ", unit, ": ", nrow(out), " polygon(s), ",
+          format(sum(out$COUNT_TOTAL), big.mark = ","), " residents in the AOI")
+  out
 }
 
 # ==============================================================================

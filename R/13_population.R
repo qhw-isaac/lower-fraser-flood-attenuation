@@ -1,7 +1,9 @@
 # ==============================================================================
 # 13_population.R: Benefiting people downstream of priority sub-basins
 # ------------------------------------------------------------------------------
-# Population unit = 2021 Census dissemination areas (DAs).
+# Population unit = whichever geography POP_UNIT names in 00_setup.R: 2021
+# Census dissemination areas (DAs, the default) or dissemination blocks (DBs).
+# Units are addressed by POP_UID throughout; DAUID is carried for labelling.
 #
 # Steps:
 #   1. Fetch BC DAs (geometry + population), clip to the downstream AOI
@@ -25,7 +27,7 @@
 source(here::here("R", "00_setup.R"))
 
 # ---- 1. Population by dissemination area -------------------------------------
-# assembled by read_das() in 00_setup.R, which 10_demand.R also calls
+# assembled by read_das() in 00_setup.R
 pop <- read_das()
 pop$pop_area_km2 <- as.numeric(sf::st_area(pop)) * 1e-6
 message("  · ", nrow(pop), " dissemination areas in downstream AOI")
@@ -42,7 +44,7 @@ inter$area_km2 <- as.numeric(sf::st_area(inter)) * 1e-6
 px_km2 <- (terra::xres(fp) * terra::yres(fp)) * 1e-6
 inter$flood_km2 <- px_km2 * exactextractr::exact_extract(fp == 1, inter, "sum")
 inter <- inter |>
-  dplyr::group_by(DAUID) |>
+  dplyr::group_by(POP_UID) |>
   dplyr::mutate(pop_in_flood = COUNT_TOTAL * flood_km2 / sum(area_km2)) |>
   dplyr::ungroup()
 
@@ -70,10 +72,6 @@ for (rb_path in scenarios) {
   for (lab in unique(stats::na.omit(rb$ri_interval))) {
     seeds <- rb$HYBAS_ID[rb$ri_interval == lab & !is.na(rb$ri_interval)]
     if (length(seeds) == 0) next
-    # every basin reachable downstream of any one of the seeds. subcomponent()
-    # takes one
-    # start vertex and silently ignores the rest of a vector, so walk the seeds
-    # and union rather than passing them all at once, which undercounts a tier.
     reach_ids <- unique(unlist(lapply(
       as.character(seeds),
       function(s) igraph::V(g)$name[igraph::subcomponent(g, s, mode = "out")])))
@@ -81,8 +79,8 @@ for (rb_path in scenarios) {
 
     members <- inter[inter$HYBAS_ID %in% reach_ids, ]
     direct <- sum(members$pop_in_flood, na.rm = TRUE)
-    centres <- unique(members$DAUID)
-    total_in_centres <- sum(pop$COUNT_TOTAL[pop$DAUID %in% centres], na.rm = TRUE)
+    centres <- unique(members$POP_UID)
+    total_in_centres <- sum(pop$COUNT_TOTAL[pop$POP_UID %in% centres], na.rm = TRUE)
     indirect <- total_in_centres - direct
 
     out_rows[[length(out_rows) + 1]] <- dplyr::tibble(
@@ -105,10 +103,10 @@ for (rb_path in scenarios) {
 # ---- QA preview --------------------------------------------------------------
 downstream_aoi <- read_aoi("downstream")
 
-# per-DA flood summary (one row per DA).
+# per-unit flood summary (one row per DA, or per DB when POP_UNIT = "DB").
 da_summary <- inter |>
   sf::st_drop_geometry() |>
-  dplyr::group_by(DAUID) |>
+  dplyr::group_by(POP_UID) |>
   dplyr::summarise(
     pop_in_flood = sum(pop_in_flood, na.rm = TRUE),
     flood_km2 = sum(flood_km2, na.rm = TRUE),
@@ -116,19 +114,16 @@ da_summary <- inter |>
     .groups = "drop"
   )
 
-# choropleth layer: each DA shaded by its own flood exposure %.
+# choropleth layer: each unit shaded by its own flood exposure %.
 pop_map <- pop |>
-  dplyr::left_join(da_summary |> dplyr::select(DAUID, flood_km2, area_km2),
-                   by = "DAUID")
+  dplyr::left_join(da_summary |> dplyr::select(POP_UID, flood_km2, area_km2),
+                   by = "POP_UID")
 pop_map$flood_pct <- ifelse(!is.na(pop_map$area_km2) & pop_map$area_km2 > 0,
                             100 * pop_map$flood_km2 / pop_map$area_km2, 0)
 pop_map$flood_pct[is.na(pop_map$flood_pct)] <- 0
-# clamp to the colour-scale domain so the gradient needs no out-of-bounds handler
+
 pop_map$flood_pct <- pmin(pmax(pop_map$flood_pct, 0), 100)
 
-# official name -> community label: strip "The" and admin prefixes ("City of",
-# "Township of", ...) until stable, since some names nest them, then tag shared
-# base names so City vs Township of Langley stay apart
 tidy_muni_names <- function(raw_nm) {
   base <- tools::toTitleCase(tolower(raw_nm))
   repeat {
@@ -158,7 +153,7 @@ hit <- sf::st_intersects(sf::st_centroid(sf::st_geometry(pop)), muni)
 da_nm <- vapply(hit, function(h) if (length(h)) muni$nm[h[1]] else NA_character_,
                  character(1))
 centres_ranked <- da_summary |>
-  dplyr::mutate(nm = da_nm[match(DAUID, pop$DAUID)]) |>
+  dplyr::mutate(nm = da_nm[match(POP_UID, pop$POP_UID)]) |>
   dplyr::filter(!is.na(nm)) |>
   dplyr::group_by(nm) |>
   dplyr::summarise(pop_in_flood = sum(pop_in_flood, na.rm = TRUE),
@@ -167,13 +162,8 @@ centres_ranked <- da_summary |>
                    .groups = "drop") |>
   dplyr::mutate(flood_pct = ifelse(area_km2 > 0, 100 * flood_km2 / area_km2, 0))
 
-# (a) map: DAs shaded by flood exposure %. Community names are left off, since
-# at this extent the labels cover the exposed areas the figure exists to show.
-# Municipal outlines and the graticule locate them instead.
 lc <- sf::st_coordinates(sf::st_centroid(sf::st_geometry(muni)))
 
-# frame on the community centroids (Salish Sea -> Hope corridor); sparse
-# upstream DAs up the Pitt/Stave/Harrison valleys fall outside this view.
 view <- if (nrow(lc) > 0) {
   c(xmin = min(lc[, 1]), ymin = min(lc[, 2]),
     xmax = max(lc[, 1]), ymax = max(lc[, 2]))
@@ -198,10 +188,6 @@ fp_outline <- sf::st_as_sf(
 muni_layer <- ggplot2::geom_sf(data = muni, fill = NA, colour = "white",
                                linewidth = 0.35, alpha = 0.8)
 
-# the floodplain is drawn through a colour scale purely so it earns a legend
-# key, being the most prominent mark. The white municipal hairlines stay
-# out of the legend, since a white key on a white panel shows nothing, and the
-# caption carries them instead.
 outline_cols <- c("Modelled floodplain" = "#3182bd")
 
 p_map <- ggplot2::ggplot() +
@@ -219,8 +205,6 @@ p_map <- ggplot2::ggplot() +
   ggplot2::scale_fill_gradientn(
     colours = c(land_fill, "#fef0d9", "#fdcc8a", "#fc8d59",
                 "#e34a33", "#b30000"),
-    # break points 0/2/10/30/60/100 % rescaled to [0, 1] for the gradient stops
-    # (flood_pct is pre-clamped to [0, 100], so no out-of-bounds handling needed)
     values = c(0, 0.02, 0.10, 0.30, 0.60, 1),
     limits = c(0, 100),
     na.value = land_fill,
@@ -244,74 +228,11 @@ p_map <- ggplot2::ggplot() +
     legend.position = "right",
     legend.title = ggplot2::element_text(size = 8.5, face = "bold"),
     legend.text = ggplot2::element_text(size = 7.5),
-    # the right margin is the legend's; without it the colour-bar labels are
-    # clipped by the edge of the device
     plot.margin = ggplot2::margin(8, 14, 6, 8)
   )
 
 ggplot2::ggsave(file.path(qa_dir(), "13_population_map.png"),
                 p_map, width = 13, height = 5.5, dpi = 180, bg = "white")
 message("  \u00b7 qa preview: ", file.path(qa_dir(), "13_population_map.png"))
-
-# (b) exposure by community, from DA counts. Two figures rather than one paired
-# panel, each ranked on its own measure: Harrison Hot Springs is next to last
-# on headcount and first by a wide margin on share of area, which a shared
-# headcount order hides. Both go to output/figures, since who is exposed and how
-# heavily is a result in its own right.
-if (any(centres_ranked$pop_in_flood > 0)) {
-  comma <- function(x) format(round(x), big.mark = ",", scientific = FALSE,
-                              trim = TRUE)
-
-  # one bar chart, ranked on whichever measure it carries
-  ranked_bars <- function(d, value, label, fill, title, subtitle, xlab) {
-    d <- d |>
-      dplyr::filter({{ value }} > 0) |>
-      dplyr::slice_max({{ value }}, n = 20) |>
-      dplyr::arrange({{ value }}) |>
-      dplyr::mutate(nm = factor(nm, levels = nm))
-
-    ggplot2::ggplot(d, ggplot2::aes(x = {{ value }}, y = nm)) +
-      ggplot2::geom_col(width = 0.62, fill = fill) +
-      ggplot2::geom_text(ggplot2::aes(label = {{ label }}), hjust = -0.12,
-                         size = 3.1, colour = "#3f4b58") +
-      ggplot2::scale_x_continuous(
-        labels = comma, expand = ggplot2::expansion(mult = c(0, 0.16))) +
-      ggplot2::scale_y_discrete(expand = ggplot2::expansion(add = 0.8)) +
-      ggplot2::labs(title = title, subtitle = subtitle, x = xlab, y = NULL) +
-      ggplot2::theme_minimal(base_size = 11) +
-      ggplot2::theme(
-        plot.title = ggplot2::element_text(face = "bold", size = 12),
-        plot.subtitle = ggplot2::element_text(colour = "grey40", size = 9,
-                                              margin = ggplot2::margin(b = 8)),
-        axis.title.x = ggplot2::element_text(colour = "grey40", size = 9),
-        panel.grid.major.y = ggplot2::element_blank(),
-        panel.grid.minor = ggplot2::element_blank())
-  }
-
-  save_fig <- function(p, file, w, h) {
-    ggplot2::ggsave(file, p, width = w, height = h, dpi = 200, bg = "white")
-    message("  \u00b7 figure: ", file)
-  }
-
-  centres_lab <- centres_ranked |>
-    dplyr::mutate(pop_lab = comma(pop_in_flood),
-                  pct_lab = paste0(round(flood_pct, 1), "%"))
-
-  save_fig(
-    ranked_bars(centres_lab, pop_in_flood, pop_lab, "#e6550d",
-                "Residents of the modelled floodplain, by community",
-                paste0("2021 census counts by dissemination area, split by ",
-                       "each area's floodplain share"),
-                "People"),
-    file.path(paths()$figures, "13_fig_population_in_floodplain.png"), 8.5, 6)
-
-  save_fig(
-    ranked_bars(centres_lab, flood_pct, pct_lab, "#756bb1",
-                "Share of community area in the modelled floodplain",
-                paste0("The same communities ranked on exposure rather than ",
-                       "headcount, which reorders them substantially"),
-                "% of land area"),
-    file.path(paths()$figures, "13_fig_exposure_share.png"), 8.5, 6)
-}
 
 message("✓ 13_population.R: completed ", length(scenarios), " scenario(s)")

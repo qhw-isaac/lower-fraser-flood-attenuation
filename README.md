@@ -37,7 +37,7 @@ R/
 ├── 04_soils_hysog.R          hydrologic soil groups (HYSOGs250m)
 ├── 05_dem_slope.R            slope from Copernicus GLO-30 DEM
 ├── 06_precipitation.R        precipitation scenarios (PCIC PRISM, ECCC RDPA)
-├── 07_floodplains.R          floodplain extents (NHC Lower Fraser 2D model)
+├── 07_floodplains.R          floodplain extent (JRC/CEMS global river flood hazard, RP100)
 ├── 08_curve_numbers.R        SCS curve numbers (baseline + barren counterfactual)
 ├── 09_runoff_retention.R     potential runoff retention per pixel
 ├── 10_demand.R               downstream flood exposure (built-up + cropland)
@@ -45,7 +45,7 @@ R/
 ├── 12_realized_benefit.R     realized benefit = provision × demand, ranked
 ├── 13_population.R           benefiting population (Census dissemination areas)
 │
-├── 99_data_package.R         publishable spatial data package (output/data_package/)
+├── 99_data_package.R         result GeoPackage + rasters (output/data_package/)
 ├── 99_interactive_map.R      interactive web map (output/interactive_map/)
 ```
 
@@ -65,7 +65,7 @@ Raw datasets are downloaded manually and placed into `data/raw/<local_path>` as 
 
 | Folder | Contents |
 |--------|----------|
-| `output/data_package/` | publishable data package: GeoPackage, GeoJSON, shapefiles, CSV, COG rasters, dictionary, metadata |
+| `output/data_package/` | result GeoPackage + rasters |
 | `output/interactive_map/` | interactive map |
 | `output/figures/` | QA previews |
 | `output/tables/` | summary tables |

@@ -53,8 +53,7 @@
   .radio-inline.wrap2 label{flex:1 1 calc(50% - 3px)}
   /* sub-choice within a view, smaller than the lens-level radios */
   .radio-inline.compact label{padding:5px 6px;font-size:11px;border-radius:6px}
-  /* Rainfall scenario, the one model-level switch, is drawn as cards with a
-     radio dot rather than the compact pills the per-lens radios use. */
+  /* Rainfall scenario is the one model-level switch, so cards rather than pills. */
   .scen-choice{gap:8px}
   .scen-choice label{flex-direction:row;align-items:center;justify-content:flex-start;
        gap:10px;text-align:left;padding:11px 12px;font-size:12.5px;background:var(--panel2);
@@ -80,8 +79,7 @@
   .card{background:var(--panel2);border:1px solid var(--line);border-radius:11px;padding:15px}
   .card h3{margin:0;font-size:15.5px;font-weight:650}
   .card .sub2{font-size:11.5px;color:var(--muted);margin:2px 0 0;text-transform:uppercase;letter-spacing:.08em}
-  /* Headline figure and its unit. The unit runs to two or three lines, so it
-     is centred against the number rather than sat on its baseline. */
+  /* The unit runs to two or three lines, so centre it against the number. */
   .big{display:flex;align-items:center;gap:10px;margin:14px 0 3px}
   .big .n{font-size:30px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1}
   .big .u{font-size:12px;color:var(--muted);line-height:1.35}
@@ -163,20 +161,15 @@
   .leaflet-tooltip.geo-label:before{display:none}
   /* rainfall-scenario note, under the scenario control */
   .scen-note{font-size:11px;line-height:1.5;color:var(--muted);margin:7px 0 0}
-  /* Selection cascade: dashes along the real stream channels inside the
-     contributing area, oriented downstream (drawNetwork). The dash period
-     (8+12) must equal the per-cycle offset travel (-20) or the loop jumps. */
+  /* Dash period (8+12) must equal the per-cycle offset travel (-20) or the loop jumps. */
   .flow-line{animation:flowdash 1.5s linear infinite}
   @keyframes flowdash{to{stroke-dashoffset:-20}}
-  /* Flow path: the chain of basins a clicked area drains through. A per-basin
-     animation-delay (set in JS) staggers the pulse downstream, so the glow
-     carries flow direction without a separate arrow or line. */
+  /* Flow path. A per-basin animation-delay (set in JS) staggers the pulse downstream. */
   .glow-basin{animation:basinglow 1.9s ease-in-out infinite;
         filter:drop-shadow(0 0 4px rgba(43,179,230,.85))}
   .glow-source{filter:drop-shadow(0 0 7px rgba(43,179,230,.95)) drop-shadow(0 0 3px rgba(43,179,230,.9))}
   @keyframes basinglow{0%,100%{fill-opacity:.32}50%{fill-opacity:.82}}
-  /* Selected-neighbourhood card: smaller than the region card above it, with
-     the demand orange as an edge so the two are told apart at a glance. */
+  /* Selected-neighbourhood card, edged in demand orange to separate it from the region card. */
   .sel-card{background:#1b2635;border:1px solid #31445b;border-left:3px solid #d1712f;
         border-radius:9px;padding:9px 12px 10px;margin-bottom:10px}
   .sel-card .lab{display:flex;align-items:center;font-size:9.5px;letter-spacing:.11em;
@@ -194,8 +187,7 @@
         margin-top:5px;font-variant-numeric:tabular-nums}
   .sel-card .ckey i{display:inline-block;width:7px;height:7px;border-radius:2px;margin-right:4px}
   .sel-card .tip{font-size:10.5px;margin-top:6px}
-  /* on-map lens banner: names what entity the reader is looking at / clicking
-     (downstream communities · upstream ecosystems · their region-wide interaction) */
+  /* on-map lens banner: names the entity being read. */
   .lens-banner{position:fixed;left:418px;top:14px;z-index:1100;max-width:312px;
         background:#0f1722e8;border:1px solid var(--line);border-left:4px solid var(--accent);
         border-radius:9px;padding:8px 13px;box-shadow:0 4px 14px #0006;-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px)}
@@ -203,8 +195,7 @@
   .lens-banner .lt{font-size:12.5px;font-weight:680;letter-spacing:.2px;display:flex;align-items:center;gap:7px}
   .lens-banner .lt .ic{font-size:13px}
   .lens-banner .ls{font-size:11px;color:var(--muted);margin-top:3px;line-height:1.45}
-  /* Assumptions & limitations: a persistent button, bottom-right, clear of the
-     Leaflet attribution bar, opening a scrollable panel. */
+  /* Assumptions & limitations. Bottom-right, clear of the Leaflet attribution bar. */
   .lim-btn{position:fixed;right:14px;bottom:30px;z-index:1200;display:flex;align-items:center;gap:7px;
         background:#0f1722ee;color:var(--ink);border:1px solid var(--line);border-left:4px solid var(--gold);
         border-radius:9px;padding:9px 13px;font:inherit;font-size:12.5px;font-weight:650;cursor:pointer;
@@ -241,27 +232,18 @@
   .reset-btn{width:34px;height:34px;line-height:34px;text-align:center;font-size:15px;
         background:#fff;color:#33475b;cursor:pointer;border:none;display:block;font-weight:700}
   .reset-btn:hover{background:#eef2f6;color:#0f2233}
-  /* Pointer routing. Municipality polygons take clicks over their full fill,
-     even when transparent; in the land lenses they step aside so the sub-basins
-     underneath stay reachable. DA polygons take the pointer only in the demand
-     view's neighbourhood read.
-     Chrome draws the focus ring around a path's bounding box, so a clicked
-     watershed leaves a rectangle over the map. Keep it for keyboard focus. */
+  /* Municipality polygons take clicks over their full fill, even when transparent.
+     Chrome draws the focus ring on a path's bounding box; keep it for keyboard focus. */
   .leaflet-container:focus:not(:focus-visible),
   .leaflet-interactive:focus:not(:focus-visible){outline:none}
   #map:not(.demand-by-da) .leaflet-das-pane{pointer-events:none}
-  /* Both land lenses are excluded, so the rule below can hand the pointer to the
-     sub-basins; so is the neighbourhood read, leaving styleAll()'s per-community
-     gate to decide which communities keep their clicks. */
+  /* Land lenses and the neighbourhood read are excluded so styleAll() gates the rest. */
   #map:not(.lens-subbasin):not(.lens-ledger-supply):not(.demand-by-da) .leaflet-munis-pane .leaflet-interactive{pointer-events:all !important}
   #map.lens-ledger-supply .leaflet-munis-pane .leaflet-interactive,
   #map.lens-subbasin .leaflet-munis-pane .leaflet-interactive{pointer-events:none !important;cursor:default}
-  /* Community lens: the community is the unit being read, so the watersheds
-     under it take no pointer at all, no hover outline, no tooltip, no click.
-     Without this a click over ground no community covers, most visibly the
-     Whatcom side, falls through to the watershed and changes tab unasked.
-     The rule has to name the paths: Leaflet sets pointer-events on each one,
-     and a child set to auto stays hit-testable under an inert pane. */
+  /* Community lens: watersheds underneath take no pointer, or a click over ground no
+     community covers falls through and changes tab. Naming the paths is required:
+     Leaflet sets pointer-events per path, and a child set to auto stays hit-testable. */
   #map.lens-city .leaflet-areas-pane .leaflet-interactive,
   #map.lens-compare .leaflet-areas-pane .leaflet-interactive{pointer-events:none;cursor:default}
   /* community view: quiet the hydrography and terrain so the boundaries lead */
@@ -272,18 +254,7 @@
 </style>
 
 <style>
-  /* ==========================================================================
-     Phone walkthrough
-     --------------------------------------------------------------------------
-     What a phone gets instead of the map, and the page the slide deck's QR code
-     lands on. The map needs a pointer and a wide canvas, so a phone is given the
-     argument in full instead: why upstream ecosystems matter, then each of the
-     three map views as a clip of the real tool being driven.
-
-     Sections run: opening, three numbered parts (one per map view), close. Part
-     accents match the colours the map uses for the same view, so a reader who
-     later opens the map recognises them.
-     ========================================================================== */
+  /* Phone walkthrough: opening, three numbered parts (one per map view), close. */
   html.guide, html.guide body{overflow:auto;height:auto;background:#0d1420}
   html.guide #app{display:none}
   #guide{display:none}
@@ -339,11 +310,9 @@
 
   /* --- a clip of the tool in use ------------------------------------------- */
   #guide .clip{margin:22px 0 0;position:relative}
-  /* The recordings are full desktop screens; the clip's own ratio replaces this
-     once its metadata arrives, but matching it up front avoids a layout jump.
-     The poster is also painted as the element's background (set in JS): with a
-     colour alone, any moment the decoder has no frame to show landed on a flat
-     near-white panel, which is the flash seen at a loop restart. */
+  /* The clip's own ratio replaces this once its metadata arrives; matching it up front
+     avoids a layout jump. The poster is also painted as the element's background (set
+     in JS), which removes the flash at a loop restart. */
   #guide .clip video{width:100%;display:block;border-radius:12px;
         border:1px solid var(--g-rule);background-color:#eef2f6;
         background-size:cover;background-position:center;aspect-ratio:15/8}
@@ -356,8 +325,7 @@
         letter-spacing:.14em;text-transform:uppercase;color:#5a6d84}
   #guide .clip figcaption{font-size:14px;line-height:1.55;color:var(--g-dim);
         margin:11px 0 0}
-  /* A clip is a whole desktop screen, so the panel figures are small at phone
-     width. Full screen is the only way to read them without re-recording. */
+  /* Panel figures are small at phone width, so full screen is the only way to read them. */
   #guide .clip video{cursor:zoom-in}
   #guide .clip .zoom{position:absolute;top:10px;right:10px;display:flex;
         align-items:center;gap:6px;font:inherit;font-size:11.5px;font-weight:650;
@@ -537,8 +505,7 @@
         <div id="controls"></div>
         <div id="panel"></div>
       </div>
-      <!-- rainfall scenario: a model-level switch, not a display option, so it
-           sits in its own block above them and stays reachable from every lens -->
+      <!-- rainfall scenario is a model-level switch, so it sits above the display options -->
       <details class="opts" id="scen-opts" open>
         <summary>Rainfall scenario<span class="sum-val">: <span id="scen-sum"></span></span></summary>
         <div class="body" id="scen-body"></div>
@@ -567,9 +534,7 @@
   <div id="map"></div>
   <div id="lensBanner" class="lens-banner hide"></div>
 
-  <!-- Method & limitations: reachable from every view rather than a tab of
-       prose, so what the tool measures and the conditions under which it holds
-       are one click away. The full method is in the technical report. -->
+  <!-- Method & limitations: reachable from every view. Full method in the technical report. -->
   <button id="limBtn" class="lim-btn" aria-expanded="false" aria-controls="limPanel">
     <span class="lim-ico" aria-hidden="true">!</span>Method &amp; limitations
   </button>
@@ -586,17 +551,9 @@
 </div>
 
 <script>
-/* ============================================================================
-   Which page this is
-   ----------------------------------------------------------------------------
-   The map places a 400 px reading panel beside a large canvas and is read by
-   pointing at things, so a phone gets the walkthrough above instead. That
-   decision is made before anything heavy is requested: Leaflet, data.js and
-   map.js are injected only when the map is actually going to run.
-
-   ?map   forces the interactive map on any device (the "load it anyway" button)
-   ?guide forces the walkthrough on any device, for checking it from a desktop
-============================================================================ */
+/* ?map   forces the interactive map on any device
+   ?guide forces the walkthrough on any device
+   Leaflet, data.js and map.js are injected only when the map will actually run. */
 (function(){
   var q = location.search;
   var forceMap   = /[?&]map\b/.test(q);
@@ -628,13 +585,8 @@
     })(0);
   }
 
-  /* --------------------------------------------------------------------------
-     Walkthrough behaviour
-     Clips are held in data-src and fetched only as they come near the viewport,
-     so a phone on cellular downloads the two it is reading rather than all six.
-     A clip that is not on the server yet leaves its description in place, which
-     keeps the page readable while the recordings are still being made.
-     -------------------------------------------------------------------------- */
+  /* Clips are held in data-src and fetched as they near the viewport. A clip not yet
+     on the server leaves its description in place. */
   function startGuide(){
     [].forEach.call(document.querySelectorAll(".go-map"), function(b){
       b.onclick = function(){ loadMap(); window.scrollTo(0,0); };

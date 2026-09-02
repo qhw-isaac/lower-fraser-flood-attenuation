@@ -1611,13 +1611,13 @@ function renderPanel(){
         ${pairs?`<div class="card" style="margin-top:10px"><p class="sub2" style="margin:0">Largest shared upstream contribution</p><div class="share-list">${pairs}</div><p class="tip" style="margin-top:8px">Percentages are the overlap in the contribution each receives, after distance decay. Select a pair to compare.</p></div>`:""}
         <div class="next-step eco" onclick="setMode('subbasin')">See the upstream ecosystems these communities rely on <span class="arw">&rsaquo;</span></div>`;
       return; }
-    // No modelled exposure: the flood model covers the Fraser freshet corridor,
-    // so a community with no delivered contribution has no mapped Fraser flood
+    // No modelled exposure: the flood model covers river flooding only, so a
+    // community with no delivered contribution has no mapped river flood
     // exposure. Say that plainly rather than show a rank that would carry none.
     if(!((provVol[selCity]||0)>0)){
       el.innerHTML=`<div class="card">
         <h3>${muniName(selCity)}</h3><p class="sub2">${muniTag(selCity)}</p>
-        <div class="callout none" style="margin-top:12px">This community has no mapped exposure in the modelled Fraser River freshet floodplain, so no upstream contribution is credited to it here. Local flooding from other sources (coastal, creeks) is outside this model. See <b>Method &amp; limitations</b>, bottom right of the map.</div>
+        <div class="callout none" style="margin-top:12px">This community has no mapped exposure in the modelled river floodplain, so no upstream contribution is credited to it here. Flooding from other sources (coastal storm surge, urban drainage) is outside this model. See <b>Method &amp; limitations</b>, bottom right of the map.</div>
         <button class="btn-clear" onclick="resetApp()">Back to the community picker</button>
       </div>`;
       return; }
@@ -1798,7 +1798,7 @@ function renderPanel(){
       const daTotal=Object.keys(DA_DEMAND).reduce((s,k)=>s+daArea(k),0);
       const daBlock=byDa?`<p class="sub2" style="margin:15px 0 0">Highest exposure by neighbourhood</p>
         <div class="share-list">${daRows}</div>
-        <p class="tip">Only neighbourhoods (${daRanked.length}) carrying exposed land inside the modelled 1894 freshet floodplain are included.</p>`:"";
+        <p class="tip">Only neighbourhoods (${daRanked.length}) carrying exposed land inside the modelled 100-year river floodplain are included.</p>`:"";
       const ramp=rampCss(t=>exposureColor(EXP_LO*Math.pow(EXP_HI/EXP_LO,t)));
       el.innerHTML=`${selCard}<div class="card">
         <h3>Downstream flood exposure</h3><p class="sub2">Service-benefiting areas</p>
@@ -2052,13 +2052,13 @@ const BRIEF=[
   ["1 · Runoff retention",
    "Runoff is estimated twice for each 30 m cell, once under current land cover and once as bare ground. The difference is the runoff the existing soils and vegetation retain. Both estimates use the SCS curve-number method, driven by land cover, soil drainage and slope."],
   ["2 · Downstream exposure",
-   "Exposure is the built-up land and cropland inside the 1894 flood-of-record Fraser freshet extent (NHC Lower Fraser 2D model), the floodplain footprint today's dikes defend. Each km² counts equally. This is the demand that upstream retention serves. The extent is a narrow ribbon along the river, reaching 270 of the region's 4,139 census neighbourhoods, so most ground carries no exposure."],
+   "Exposure is the built-up land and cropland inside the modelled 100-year river flood extent (JRC/CEMS global river flood hazard maps). The maps carry no flood protection, so the extent is the floodplain footprint today's dikes defend. Each km² counts equally. This is the demand that upstream retention serves. The extent follows the Fraser and its tributaries, so much of the region's higher ground carries no exposure."],
   ["3 · Linking the two",
    "Retention is credited to the exposure it drains toward along the stream network, discounted by flow distance on a 20 km half-life. Areas draining away from every focus community receive no credit and are drawn faint, so a high retention value alone does not make an area a priority."],
   ["4 · Realised benefit",
    "An area's benefit combines the runoff it retains with the exposure it drains toward. Areas that several communities draw on are candidates for coordinated investment."],
   ["Inputs",
-   "All inputs are open data: NALCMS and AAFC land cover, HYSOGs soils, Copernicus elevation, PCIC PRISM climatology and the ECCC RDPA November 2021 storm analysis, the NHC Lower Fraser 1894 freshet extent, BC Freshwater Atlas watersheds and streams, the USGS Watershed Boundary Dataset and NHDPlus for the transboundary watersheds, and BC census subdivision and dissemination area boundaries."]
+   "All inputs are open data: NALCMS and AAFC land cover, HYSOGs soils, Copernicus elevation, PCIC PRISM climatology and the ECCC RDPA November 2021 storm analysis, the JRC/CEMS global river flood hazard maps, BC Freshwater Atlas watersheds and streams, the USGS Watershed Boundary Dataset and NHDPlus for the transboundary watersheds, and BC census subdivision and dissemination area boundaries."]
 ];
 const LIMITS={
   assumptions:[
@@ -2082,8 +2082,12 @@ const LIMITS={
      "Absolute retained-runoff volumes shift with the rainfall scenario. Which areas matter relative to each other holds far steadier, and that pattern is what the tool is built to show."],
     ["Shading cannot be compared across scenarios",
      "The colour scale is rebuilt for each storm, running from zero to that storm's darkest area. Compare shading within one scenario, and use the volumes to compare across two."],
-    ["Only Fraser freshet flooding is represented",
-     "Exposure comes from the NHC Fraser River freshet model, Hope to the Salish Sea. Coastal storm surge, the Serpentine and Nicomekl lowlands, and small-tributary flooding fall outside that domain, so they carry no exposure and the areas upstream of them receive no credit."],
+    ["Cross-border watersheds do not line up exactly",
+     "Canada and the United States survey their watersheds separately, and the two do not divide the border the same way. Reconciling them leaves some mismatches, Fishtrap Creek among them, where one American watershed covers several Canadian ones. Where the two overlap the Canadian delineation is kept and the American one trimmed, so no ground is counted twice, but a watershed the border divides can still read as cut. The technical report sets out the cases."],
+    ["Only river flooding is represented",
+     "Exposure comes from a global river flood model, so it covers the Fraser and its tributaries across the region. Coastal storm surge, sea-level rise, and pluvial or urban-drainage flooding fall outside it, so areas exposed only to those carry no exposure and the areas upstream of them receive no credit."],
+    ["The hazard maps are global, not local",
+     "The flood extent is modelled worldwide at about 90 m from a global elevation model. It is coarser than a local hydraulic study, does not resolve individual dikes, and should be read as a regional screening layer rather than a site-specific flood map."],
     ["Critical infrastructure is not counted",
      "Schools and hospitals are located but excluded from the exposure that drives the results. Which assets belong in a critical-infrastructure set, and what each is worth, are policy decisions this model does not make. The slider under Supply &amp; demand is a trial control, not a modelled result."],
     ["Population does not drive the ranking",

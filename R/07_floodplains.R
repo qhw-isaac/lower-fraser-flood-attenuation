@@ -1,19 +1,12 @@
 # ==============================================================================
 # 07_floodplains.R: floodplain raster used to mask "demand" pixels
 # ------------------------------------------------------------------------------
-# Rasterizes the NHC Lower Fraser 2D flood extent onto the project grid. The
-# 1894 flood of record is the natural floodplain footprint the dikes defend; the
-# Historic 1% AEP extent (residual risk with dikes in place) is registered as
-# nhc_floodplain_1aep for a later sensitivity run.
-#
-# Scope: the NHC model covers the Fraser freshet corridor, Hope to the Strait of
-# Georgia. Floodplains outside it (Serpentine/Nicomekl, coastal storm surge,
-# small tributaries) carry no demand here. The retired national source (Mohanty
-# & Simonovic CMIP6 100-yr) is coarser and is not a fallback.
+# Creates the floodplain raster from the JRC/CEMS global river flood hazard map 
+# (100-year return period)
 #
 # Inputs (data/processed/):
 #   03_lulc_values.tif
-#   data_path("nhc_floodplain_1894")   flood-extent polygons (EPSG:26910)
+#   data_path("jrc_floodmap_rp100")  RP100 water depth, m (EPSG:3005, 90 m)
 #
 # Outputs (data/processed/):
 #   07_floodplain.tif
@@ -23,15 +16,12 @@ source(here::here("R", "00_setup.R"))
 
 lulc_grid <- terra::rast(file.path(paths()$processed, "03_lulc_values.tif"))
 
-fp_poly <- sf::st_read(data_path("nhc_floodplain_1894"), quiet = TRUE) |>
-  sf::st_transform(PROJECT_CRS)
+# depth -> 0/1, then resample to the 30 m grid
+depth <- terra::rast(data_path("jrc_floodmap_rp100"))
+fp <- terra::ifel(is.na(depth) | depth <= FLOOD_DEPTH_MIN_M, 0, 1)
+fp <- align_to_grid(fp, method = "near", template = lulc_grid)
 
-fp <- terra::rasterize(terra::vect(fp_poly), lulc_grid, field = 1, background = 0)
-
-# punch out mapped WATER BODIES (FWA lakes + double-line rivers), not NALCMS
-# water pixels: punching pixels turned every ditch and slough into a hole,
-# 438 km² of speckle. In-floodplain ponds stay floodplain, since they flood
-# along with the land around them.
+# punch out mapped WATER BODIES (FWA lakes + double-line rivers)
 downstream_aoi <- read_aoi("downstream")
 waterbodies <- tryCatch({
   dom <- sf::st_as_sfc(sf::st_bbox(downstream_aoi))
@@ -52,9 +42,7 @@ if (!is.null(waterbodies)) {
   fp <- terra::mask(fp, lulc_grid)
 }
 
-# clip to the coastline. NALCMS maps the Sturgeon/Roberts Bank intertidal marsh
-# as shrubland, so the LULC mask alone keeps foreshore that reads as ocean. The
-# census DA boundary file is already coast-clipped, so it gives the land base.
+# clip to the coastline
 da_file <- data_path("da_boundary_2021")
 da_crs <- sf::st_crs(sf::st_read(da_file, quiet = TRUE,
   query = paste0("SELECT * FROM ", tools::file_path_sans_ext(basename(da_file)),
@@ -68,13 +56,24 @@ fp <- terra::mask(fp, terra::rasterize(terra::vect(land), fp, field = 1))
 # keep only floodplain inside the downstream AOI (where demand is evaluated)
 fp <- terra::mask(fp, terra::rasterize(terra::vect(downstream_aoi), fp, field = 1))
 
+# minimum mapping unit
+mmu_m2 <- terra::xres(depth) * terra::yres(depth)
+clumps <- terra::patches(terra::ifel(fp == 1, 1, NA), directions = 8,
+                         zeroAsNA = TRUE)
+sz <- terra::freq(clumps)
+tiny <- sz$value[sz$count * terra::xres(fp) * terra::yres(fp) < mmu_m2]
+if (length(tiny)) {
+  keep <- terra::subst(clumps, from = tiny, to = NA)
+  fp <- terra::ifel(!is.na(fp) & is.na(keep), 0, fp)
+}
+message(sprintf("  · sieved %d clumps below the %.2f ha minimum mapping unit",
+                length(tiny), mmu_m2 / 1e4))
+
 safe_writeRaster(fp, file.path(paths()$processed, "07_floodplain.tif"))
 
 # ---- QA preview --------------------------------------------------------------
-# the floodplain extent that carries all downstream demand, inside the demand AOI
+# the floodplain extent that intersects the demand AOI
 qa_png("07_floodplain.png", function() {
-  # trim() frames on the floodplain, which stops at the coast, so open the frame
-  # wide enough to hold the coast-clipped demand boundary too
   aoi_disp <- aoi_display()
   fp_trim <- terra::trim(fp)
   view <- span_bbox(fp_trim, aoi_disp)
@@ -88,5 +87,5 @@ qa_png("07_floodplain.png", function() {
 fp_km2 <- terra::global(fp, "sum", na.rm = TRUE)[1, 1] *
   terra::xres(fp) * terra::yres(fp) * 1e-6
 message(sprintf(
-  "✓ 07_floodplains.R: wrote floodplain raster (NHC 1894 flood of record, %.0f km² in demand AOI)",
+  "✓ 07_floodplains.R: wrote floodplain raster (JRC/CEMS RP100 river flood hazard, %.0f km² in demand AOI)",
   fp_km2))
